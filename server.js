@@ -15,7 +15,7 @@ const port = 5000;
 
 app.use(
   cors({
-    origin: ["https://gmzfoodtrade.shop"],
+    origin: ["http://gmzfoodtrade.shop"],
     methods: ["POST", "GET", "PUT", "DELETE"],
     credentials: true,
   })
