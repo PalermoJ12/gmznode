@@ -65,13 +65,6 @@ db.getConnection((err, connection) => {
   connection.release();
 });
 
-
-const options = {
-  key: fs.readFileSync('/etc/letsencrypt/live/api.gmzfoodtrade.shop/privkey.pem'),
-  cert: fs.readFileSync('/etc/letsencrypt/live/api.gmzfoodtrade.shop/cert.pem'),
-  ca: fs.readFileSync('/etc/letsencrypt/live/api.gmzfoodtrade.shop/chain.pem')
-};
-
 const queryAsync = (sql, params) => {
   return new Promise((resolve, reject) => {
     db.query(sql, params, (err, results) => {
@@ -6251,8 +6244,6 @@ app.post("/api/cancelled_order/", async (req, res) => {
 /*
 CUSTOMER
 */
-
-
-https.createServer(options, app).listen(port, localIP, () => {
-  console.log(`Server running at https://${localIP}:${port}`);
+app.listen(port, () => {
+  console.log(`Server running at http://${localIP}:${port}`);
 });
