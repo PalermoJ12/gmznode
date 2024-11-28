@@ -15,7 +15,7 @@
 
   app.use(
     cors({
-      origin: ["http://localhost:3000"],
+      origin: ["http://gmzfoodtrade.shop/dashboard"],
       methods: ["POST", "GET", "PUT", "DELETE"],
       credentials: true,
     })
