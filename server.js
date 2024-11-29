@@ -18,6 +18,7 @@
       origin: ["http://gmzfoodtrade.shop"],
       methods: ["POST", "GET", "PUT", "DELETE"],
       credentials: true,
+       allowedHeaders: 'Content-Type,Authorization'
     })
   );
   app.use(bodyParser.json());
