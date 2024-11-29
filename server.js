@@ -64,6 +64,7 @@ const db = mysql.createPool({
 });
 
 
+
   db.getConnection((err, connection) => {
     if (err) {
       console.error("Error connecting to the database:", err);
@@ -6581,4 +6582,3 @@ app.post("/api/cancelled_order/", async (req, res) => {
   app.listen(port, () => {
     console.log(`Server running at http://${localIP}:${port}`);
   });
-
