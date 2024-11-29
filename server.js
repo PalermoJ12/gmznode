@@ -1,7 +1,7 @@
   const express = require("express");
   const multer = require("multer");
   const path = require("path");
-  const mysql = require("mysql");
+  const mysql = require("mysql2");
   const cors = require("cors");
   const bodyParser = require("body-parser");
   const jwt = require("jsonwebtoken");
