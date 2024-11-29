@@ -55,11 +55,11 @@
   // });
 
 const db = mysql.createPool({
-  host: "localhost",
-  user: "root",
-  password: "", // Or the password you set for root
-  database: "u319302750_dbgmz",
-  connectionLimit: 10,
+  host: '127.0.0.1',           // Localhost (VPS)
+  user: 'u319302750_dbgmzadmin', // Database user
+  password: 'Dbgmzadmin112024!', // Database password
+  database: 'u319302750_dbgmz', // Database name
+  connectionLimit: 10          // Connection limit (adjust if necessary)
 });
 
 
