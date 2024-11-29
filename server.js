@@ -232,7 +232,8 @@ const db = mysql.createPool({
         u.id, u.username, u.password, u.access, 
         c.name AS customer_name, c.location AS customer_location
       FROM tblusers u
-      LEFT JOIN tblcustomer c ON u.id = c.customer_id`;
+      LEFT JOIN tblcustomer c ON u.id = c.customer_id
+      ORDER BY u.access , u.id ASC;`
 
     try {
       const results = await queryAsync(sql);
@@ -863,97 +864,100 @@ const db = mysql.createPool({
     });
   });
 
-  app.get("/api/itemdashboard", (req, res) => {
-    const sql = `
-      SELECT it.ItemName,  it.quantity as Remaining, COALESCE(SUM(p.actualQuantityProduced), 0) AS totalQuantity 
-      FROM tblitems it 
-      LEFT JOIN tblproduction p ON it.itemId = p.itemId 
-      GROUP BY it.itemId 
-      HAVING totalQuantity < 20;
-    `;
-
-    db.query(sql, (err, results) => {
-      if (err) {
-        console.error("Error fetching inventory items:", err);
-        return res.status(500).send("Error fetching inventory items");
-      }
-      return res.json(results);
-    });
-  });
-
-  app.get("/api/rawmatsdashboard", async (req, res) => {
+  app.get("/api/dashboard", async (req, res) => {
     try {
-      const query = `SELECT 
-        raw.matName, 
-        COALESCE(SUM(odi.remaining_quantity), 0) AS total_remaining_quantity
-      FROM 
-        tblrawmats raw
-      LEFT JOIN 
-        tblorderfromsupplier_items odi ON raw.matId = odi.matId
-      GROUP BY 
-        raw.matName, raw.category, raw.matId
-      HAVING 
-        COALESCE(SUM(odi.remaining_quantity), 0) < 20
-      ORDER BY 
-        total_remaining_quantity DESC;`;
-
-      db.query(query, (error, results) => {
-        if (error) {
-          console.error("Error fetching raw materials: ", error);
-          res.status(500).send("Server Error");
-        } else {
-          res.json(results);
-        }
-      });
-    } catch (error) {
-      console.error("Error in fetching raw materials: ", error);
-      res.status(500).send("Server Error");
-    }
-  });
-
-  app.get("/api/supDeliDashboard", async (req, res) => {
-    try {
-      // Adjust the query to match your table structure and required fields
-      const query = `
+      // Inventory Items query
+      const inventoryQuery = `
+        SELECT it.ItemName, it.quantity AS Remaining, COALESCE(SUM(p.actualQuantityProduced), 0) AS totalQuantity 
+        FROM tblitems it 
+        LEFT JOIN tblproduction p ON it.itemId = p.itemId 
+        GROUP BY it.itemId 
+        HAVING totalQuantity < 20;
+      `;
+  
+      // Raw Materials query
+      const rawMatsQuery = `
+        SELECT 
+          raw.matName, 
+          COALESCE(SUM(odi.remaining_quantity), 0) AS total_remaining_quantity
+        FROM 
+          tblrawmats raw
+        LEFT JOIN 
+          tblorderfromsupplier_items odi ON raw.matId = odi.matId
+        GROUP BY 
+          raw.matName, raw.category, raw.matId
+        HAVING 
+          COALESCE(SUM(odi.remaining_quantity), 0) < 20
+        ORDER BY 
+          total_remaining_quantity DESC;
+      `;
+  
+      // Supplier Deliveries query
+      const supDeliQuery = `
         SELECT  
-        
           sp.supplyName,
           od.totalCost AS totalCost,
-        IFNULL(DATE_FORMAT(od.orderDate, '%Y-%m-%d'), 'N/A') AS OrderDate,
+          IFNULL(DATE_FORMAT(od.orderDate, '%Y-%m-%d'), 'N/A') AS OrderDate,
           SUM(odi.quantity) AS totalQuantity
         FROM tblsuppliers sp
         LEFT JOIN tblordersfromsupplier od ON sp.supplyId = od.supplyId
         LEFT JOIN tblorderfromsupplier_items odi ON od.orderId = odi.orderId
         WHERE odi.quantity IS NOT NULL AND od.status = 0
-        GROUP BY od.orderId, sp.supplyName, od.status, od.totalCost, sp.supplyId;  -- Ensure to group by orderId
+        GROUP BY od.orderId, sp.supplyName, od.status, od.totalCost, sp.supplyId;
       `;
-
-      db.query(query, (error, results) => {
-        if (error) {
-          console.error("Error fetching supply deliveries: ", error);
-          return res.status(500).send("Server Error");
-        }
-
-        // Ensure results have data
-        if (results.length > 0) {
-          return res.json(results);
-        }
+  
+      // Production Dashboard query
+      const prodQuery = `
+        SELECT pd.staffName, it.itemName 
+        FROM tblproduction pd 
+        LEFT JOIN tblitems it ON pd.itemId = it.itemId 
+        WHERE pd.production_status = 0 
+        ORDER BY pd.production_status ASC;
+      `;
+  
+      // Execute all queries concurrently
+      const results = await Promise.all([
+        new Promise((resolve, reject) => {
+          db.query(inventoryQuery, (err, results) => {
+            if (err) return reject(err);
+            resolve(results);
+          });
+        }),
+        new Promise((resolve, reject) => {
+          db.query(rawMatsQuery, (err, results) => {
+            if (err) return reject(err);
+            resolve(results);
+          });
+        }),
+        new Promise((resolve, reject) => {
+          db.query(supDeliQuery, (err, results) => {
+            if (err) return reject(err);
+            resolve(results);
+          });
+        }),
+        new Promise((resolve, reject) => {
+          db.query(prodQuery, (err, results) => {
+            if (err) return reject(err);
+            resolve(results);
+          });
+        })
+      ]);
+  
+      // Destructure the results into separate variables
+      const [inventory, rawMaterials, supplierDeliveries, production] = results;
+  
+      // Send all data as a single response
+      res.json({
+        inventory,
+        rawMaterials,
+        supplierDeliveries,
+        production,
       });
     } catch (error) {
-      console.error("Error in fetching supply deliveries: ", error);
+      console.error("Error fetching dashboard data: ", error);
       res.status(500).send("Server Error");
     }
-  });
-
-  app.get("/api/productionDashboard", (req, res) => {
-    const query =
-      "SELECT pd.staffName, it.itemName FROM tblproduction pd LEFT JOIN tblitems it ON pd.itemId = it.itemId WHERE pd.production_status = 0 ORDER BY pd.production_status ASC;";
-    db.query(query, (err, results) => {
-      if (err) return res.status(500).send(err);
-      res.json(results);
-    });
-  });
-
+  }); 
   /////////////////////////////================= DASHBOARD
 
   //////////////=========DOCUMENT============>
@@ -3367,7 +3371,7 @@ const db = mysql.createPool({
 
   app.get("/api/production", (req, res) => {
     const query =
-      "SELECT pd.*, it.itemName FROM tblproduction pd LEFT JOIN tblitems it ON pd.itemId = it.itemId ORDER BY pd.production_status ASC;";
+      "SELECT pd.*, it.itemName FROM tblproduction pd LEFT JOIN tblitems it ON pd.itemId = it.itemId ORDER BY pd.productionId DESC;";
     db.query(query, (err, results) => {
       if (err) return res.status(500).send(err);
       res.json(results);
@@ -5255,244 +5259,290 @@ const db = mysql.createPool({
     });
   });
 
-  /*
+ /*
   SALES
   */
 
-  //FETCH PENDING ORDERS  with specific product per order (product object)
-  app.get("/api/pending_Orders/", (req, res) => {
-    const sql = `SELECT DISTINCT *
+//** ORDERS **/
+
+//FETCH PENDING ORDERS  with specific product per order (product object)
+app.get("/api/pending_Orders/", (req, res) => {
+  const sql = `SELECT DISTINCT *
                 FROM tblorders_customer 
                 WHERE status = "PENDING" 
                 GROUP BY order_id
                 ORDER BY date DESC, order_id DESC;`;
 
-    db.query(sql, (err, result) => {
-      if (err) {
-        console.error("Error fetching orders:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error("Error fetching orders:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
 
-      if (!result || result.length === 0) {
-        return res
-          .status(200)
-          .json({ status: "success", res: "No pending orders found." });
-      }
+    if (!result || result.length === 0) {
+      return res
+        .status(200)
+        .json({ status: "success", res: "No pending orders found." });
+    }
 
-      const orders = [];
+    const orders = [];
 
-      // Use async function inside a loop to handle multiple queries
-      const fetchProductsForOrder = (order) => {
-        return new Promise((resolve, reject) => {
-          const productSql = `SELECT *
+    // Use async function inside a loop to handle multiple queries
+    const fetchProductsForOrder = (order) => {
+      return new Promise((resolve, reject) => {
+        const productSql = `SELECT *
                               FROM tblorders_customer 
                               WHERE order_id = ? 
                               ORDER BY order_id DESC;`;
 
-          db.query(productSql, [order.order_id], (err, products) => {
-            if (err) {
-              return reject(err);
-            }
-            resolve({ ...order, products });
-          });
+        db.query(productSql, [order.order_id], (err, products) => {
+          if (err) {
+            return reject(err);
+          }
+          resolve({ ...order, products });
         });
-      };
-
-      const fetchAllOrders = async () => {
-        try {
-          const ordersWithProducts = await Promise.all(
-            result.map((order) => fetchProductsForOrder(order))
-          );
-
-          return res
-            .status(200)
-            .json({ status: "success", res: ordersWithProducts });
-        } catch (err) {
-          console.error("Error fetching products:", err);
-          return res
-            .status(500)
-            .json({ status: "error", message: "Internal server error" });
-        }
-      };
-
-      fetchAllOrders();
-    });
-  });
-  //for updating status to PREPARING
-  app.post("/api/status_preparing/", async (req, res) => {
-    const { orderId } = req.body;
-    console.log(orderId);
-    try {
-      const query = `UPDATE tblorders_customer SET status = "Preparing" WHERE order_id = ?`;
-      await db.query(query, [orderId], (err, result) => {
-        if (err) {
-          console.error("Error executing query:", err);
-          return res.status(500).json({ message: "Internal server error" });
-        }
-
-        return res.status(200).json({ status: "success", res: result });
       });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+    };
 
-  //* PREPARING MODULE **//
-  // FETCH PREPARING ORDERS
-  app.get("/api/preparing_Orders/", (req, res) => {
-    const sql = `SELECT DISTINCT *
+    const fetchAllOrders = async () => {
+      try {
+        const ordersWithProducts = await Promise.all(
+          result.map((order) => fetchProductsForOrder(order))
+        );
+
+        return res
+          .status(200)
+          .json({ status: "success", res: ordersWithProducts });
+      } catch (err) {
+        console.error("Error fetching products:", err);
+        return res
+          .status(500)
+          .json({ status: "error", message: "Internal server error" });
+      }
+    };
+
+    fetchAllOrders();
+  });
+});
+//for updating status to PREPARING
+app.post("/api/status_preparing/", async (req, res) => {
+  const { orderId } = req.body;
+  console.log(orderId);
+  try {
+    const query = `UPDATE tblorders_customer SET status = "Preparing" WHERE order_id = ?`;
+    await db.query(query, [orderId], (err, result) => {
+      if (err) {
+        console.error("Error executing query:", err);
+        return res.status(500).json({ message: "Internal server error" });
+      }
+
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.post("/api/decline_order/", async (req, res) => {
+  const { orderId, remarks } = req.body;
+  console.log("order id: ", orderId, "remarks: ", remarks);
+  try {
+    const query = `UPDATE tblorders_customer SET status = "Decline", remarks = ? WHERE order_id = ?`;
+    await db.query(query, [remarks, orderId], (err, result) => {
+      if (err) {
+        console.error("Error executing query:", err);
+        return res.status(500).json({ message: "Internal server error" });
+      }
+
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+//** ORDERS **/
+
+//** */ PREPARING MODULE **//
+
+// FETCH PREPARING ORDERS
+app.get("/api/preparing_Orders/", (req, res) => {
+  const sql = `SELECT DISTINCT *
                 FROM tblorders_customer 
                 WHERE status = "PREPARING" 
                 GROUP BY order_id
                 ORDER BY date DESC, order_id DESC;`;
 
-    db.query(sql, (err, result) => {
-      if (err) {
-        console.error("Error fetching orders:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error("Error fetching orders:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
 
-      if (!result || result.length === 0) {
-        return res
-          .status(200)
-          .json({ status: "success", res: "No preparing orders found." });
-      }
+    if (!result || result.length === 0) {
+      return res
+        .status(200)
+        .json({ status: "success", res: "No preparing orders found." });
+    }
 
-      const orders = [];
+    const orders = [];
 
-      // Use async function inside a loop to handle multiple queries
-      const fetchProductsForOrder = (order) => {
-        return new Promise((resolve, reject) => {
-          const productSql = `SELECT *
+    // Use async function inside a loop to handle multiple queries
+    const fetchProductsForOrder = (order) => {
+      return new Promise((resolve, reject) => {
+        const productSql = `SELECT *
                               FROM tblorders_customer 
                               WHERE order_id = ? 
                               ORDER BY order_id DESC;`;
 
-          db.query(productSql, [order.order_id], (err, products) => {
-            if (err) {
-              return reject(err);
-            }
-            resolve({ ...order, products });
-          });
+        db.query(productSql, [order.order_id], (err, products) => {
+          if (err) {
+            return reject(err);
+          }
+          resolve({ ...order, products });
         });
-      };
-
-      const fetchAllOrders = async () => {
-        try {
-          const ordersWithProducts = await Promise.all(
-            result.map((order) => fetchProductsForOrder(order))
-          );
-
-          return res
-            .status(200)
-            .json({ status: "success", res: ordersWithProducts });
-        } catch (err) {
-          console.error("Error fetching products:", err);
-          return res
-            .status(500)
-            .json({ status: "error", message: "Internal server error" });
-        }
-      };
-
-      fetchAllOrders();
-    });
-  });
-
-  //for updating status to PREPARED
-  app.post("/api/status_prepared/", async (req, res) => {
-    const { orderId } = req.body;
-    console.log(orderId);
-    try {
-      const query = `UPDATE tblorders_customer SET status = "Prepared" WHERE order_id = ?`;
-      await db.query(query, [orderId], (err, result) => {
-        if (err) {
-          console.error("Error executing query:", err);
-          return res.status(500).json({ message: "Internal server error" });
-        }
-
-        return res.status(200).json({ status: "success", res: result });
       });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-  //* PREPARING MODULE **//
+    };
 
-  //* PREPARED MODULE **//
-  app.get("/api/prepared_Orders/", (req, res) => {
-    const sql = `SELECT DISTINCT *
+    const fetchAllOrders = async () => {
+      try {
+        const ordersWithProducts = await Promise.all(
+          result.map((order) => fetchProductsForOrder(order))
+        );
+
+        return res
+          .status(200)
+          .json({ status: "success", res: ordersWithProducts });
+      } catch (err) {
+        console.error("Error fetching products:", err);
+        return res
+          .status(500)
+          .json({ status: "error", message: "Internal server error" });
+      }
+    };
+
+    fetchAllOrders();
+  });
+});
+
+//for updating status to PREPARED
+app.post("/api/status_prepared/", async (req, res) => {
+  const { orderId } = req.body;
+  console.log(orderId);
+  try {
+    const query = `UPDATE tblorders_customer SET status = "Prepared" WHERE order_id = ?`;
+    await db.query(query, [orderId], (err, result) => {
+      if (err) {
+        console.error("Error executing query:", err);
+        return res.status(500).json({ message: "Internal server error" });
+      }
+
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+//* PREPARING MODULE **//
+
+//* PREPARED MODULE **//
+app.get("/api/prepared_Orders/", (req, res) => {
+  const sql = `SELECT DISTINCT *
                 FROM tblorders_customer 
                 WHERE status = "PREPARED" 
                 GROUP BY order_id
                 ORDER BY date DESC, order_id DESC;`;
 
-    db.query(sql, (err, result) => {
-      if (err) {
-        console.error("Error fetching orders:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error("Error fetching orders:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
 
-      if (!result || result.length === 0) {
-        return res
-          .status(200)
-          .json({ status: "success", res: "No prepared orders found." });
-      }
+    if (!result || result.length === 0) {
+      return res
+        .status(200)
+        .json({ status: "success", res: "No prepared orders found." });
+    }
 
-      const orders = [];
+    const orders = [];
 
-      // Use async function inside a loop to handle multiple queries
-      const fetchProductsForOrder = (order) => {
-        return new Promise((resolve, reject) => {
-          const productSql = `SELECT *
+    // Use async function inside a loop to handle multiple queries
+    const fetchProductsForOrder = (order) => {
+      return new Promise((resolve, reject) => {
+        const productSql = `SELECT *
                               FROM tblorders_customer 
                               WHERE order_id = ? 
                               ORDER BY order_id DESC;`;
 
-          db.query(productSql, [order.order_id], (err, products) => {
-            if (err) {
-              return reject(err);
-            }
-            resolve({ ...order, products });
-          });
+        db.query(productSql, [order.order_id], (err, products) => {
+          if (err) {
+            return reject(err);
+          }
+          resolve({ ...order, products });
         });
-      };
+      });
+    };
 
-      const fetchAllOrders = async () => {
-        try {
-          const ordersWithProducts = await Promise.all(
-            result.map((order) => fetchProductsForOrder(order))
-          );
+    const fetchAllOrders = async () => {
+      try {
+        const ordersWithProducts = await Promise.all(
+          result.map((order) => fetchProductsForOrder(order))
+        );
 
-          return res
-            .status(200)
-            .json({ status: "success", res: ordersWithProducts });
-        } catch (err) {
-          console.error("Error fetching products:", err);
-          return res
-            .status(500)
-            .json({ status: "error", message: "Internal server error" });
-        }
-      };
+        return res
+          .status(200)
+          .json({ status: "success", res: ordersWithProducts });
+      } catch (err) {
+        console.error("Error fetching products:", err);
+        return res
+          .status(500)
+          .json({ status: "error", message: "Internal server error" });
+      }
+    };
 
-      fetchAllOrders();
-    });
+    fetchAllOrders();
   });
+});
 
-  // FETCH ALL VEHICLE
-  app.get("/api/vehicle/", (req, res) => {
-    const sql = `SELECT DISTINCT vehicle_type FROM tblvehicle ORDER BY vehicle_type`;
+// FETCH ALL VEHICLE
+app.get("/api/vehicle/", (req, res) => {
+  const sql = `SELECT DISTINCT vehicle_type FROM tblvehicle WHERE vehicle_available = 1 ORDER BY vehicle_type `;
 
-    db.query(sql, (err, result) => {
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error("Error fetching modes of payment:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+    if (!result || result.length === 0) {
+      return res
+        .status(404)
+        .json({ status: "error", res: "No riders available." });
+    }
+    return res.status(200).json({ status: "success", res: result });
+  });
+});
+
+// FETCH AVAILABLE VEHICLE (SELECTED VEHICLE TYPE)
+app.post("/api/avail_vehicles", async (req, res) => {
+  const type = req.body.type;
+
+  try {
+    const query =
+      "SELECT * FROM tblvehicle WHERE vehicle_type = ? AND vehicle_available = 1";
+    db.query(query, [type], (err, result) => {
       if (err) {
-        console.error("Error fetching modes of payment:", err);
+        console.error(">>>", err);
         return res
           .status(500)
           .json({ status: "error", message: "Internal server error" });
@@ -5502,172 +5552,402 @@ const db = mysql.createPool({
           .status(404)
           .json({ status: "error", res: "No riders available." });
       }
+
+      console.log(result);
       return res.status(200).json({ status: "success", res: result });
     });
-  });
+  } catch (error) {
+    console.error("Error fetching vehicles:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
-  // FETCH AVAILABLE VEHICLE (SELECTED VEHICLE TYPE)
-  app.post("/api/avail_vehicles", async (req, res) => {
-    const type = req.body.type;
+//for updating status to ready
+app.post("/api/assign_courier/", async (req, res) => {
+  const { orderId } = req.body;
+  console.log(orderId);
+  try {
+    const query = `UPDATE tblorders_customer SET status = "READY" WHERE order_id = ?`;
+    await db.query(query, [orderId], (err, result) => {
+      if (err) {
+        console.error("Error executing query:", err);
+        return res.status(500).json({ message: "Internal server error" });
+      }
 
-    try {
-      const query =
-        "SELECT * FROM tblvehicle WHERE vehicle_type = ? AND vehicle_available = 1";
-      db.query(query, [type], (err, result) => {
-        if (err) {
-          console.error(">>>", err);
-          return res
-            .status(500)
-            .json({ status: "error", message: "Internal server error" });
-        }
-        if (!result || result.length === 0) {
-          return res
-            .status(404)
-            .json({ status: "error", res: "No riders available." });
-        }
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
-        console.log(result);
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching vehicles:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+//for updating status READY
+app.post("/api/status_ready/", async (req, res) => {
+  const { orderId, selectedVehicle } = req.body;
 
-  //for updating status to ready
-  app.post("/api/assign_courier/", async (req, res) => {
-    const { orderId } = req.body;
-    console.log(orderId);
-    try {
-      const query = `UPDATE tblorders_customer SET status = "READY" WHERE order_id = ?`;
-      await db.query(query, [orderId], (err, result) => {
-        if (err) {
-          console.error("Error executing query:", err);
-          return res.status(500).json({ message: "Internal server error" });
-        }
+  try {
+    const query = `UPDATE tblorders_customer SET status = "Ready" , vehicle_plate = ? WHERE order_id = ?`;
+    await db.query(query, [selectedVehicle, orderId], (err, result) => {
+      if (err) {
+        console.error("Error executing query:", err);
+        return res.status(500).json({ message: "Internal server error" });
+      }
 
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+//* PREPARED MODULE **//
 
-  //for updating status READY
-  app.post("/api/status_ready/", async (req, res) => {
-    const { orderId, selectedVehicle } = req.body;
+//** READY TO GO MODULE *//
 
-    try {
-      const query = `UPDATE tblorders_customer SET status = "Ready" , vehicle_plate = ? WHERE order_id = ?`;
-      await db.query(query, [selectedVehicle, orderId], (err, result) => {
-        if (err) {
-          console.error("Error executing query:", err);
-          return res.status(500).json({ message: "Internal server error" });
-        }
-
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-  //* PREPARED MODULE **//
-
-  //** READY TO GO MODULE *//
-
-  app.get("/api/courier_ready/", (req, res) => {
-    const sql = `SELECT DISTINCT v.vehicle_plate, v.rider, v.vehicle_type, v.vehicle_available
+app.get("/api/courier_ready/", (req, res) => {
+  const sql = `SELECT DISTINCT v.vehicle_plate, v.rider, v.vehicle_type, v.vehicle_available
                 FROM tblorders_customer c
                 JOIN tblvehicle v ON c.vehicle_plate = v.vehicle_plate
                 WHERE c.status = "READY";`;
 
-    db.query(sql, async (err, result) => {
-      if (err) {
-        console.error("Error fetching vehicles:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
+  db.query(sql, async (err, result) => {
+    if (err) {
+      console.error("Error fetching vehicles:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
 
-      if (!result || result.length === 0) {
-        return res
-          .status(200)
-          .json({ status: "success", message: "No couriers are available to proceed." });
-      }
+    if (!result || result.length === 0) {
+      return res.status(200).json({
+        status: "success",
+        message: "No couriers are available to proceed.",
+      });
+    }
 
-      try {
-        // For each vehicle_plate, fetch the orders and associated products
-        const ordersWithProducts = await Promise.all(
-          result.map(async (vehicle) => {
-            const orderSql = `SELECT DISTINCT order_id, customer_loc, total_sum_price
+    try {
+      // For each vehicle_plate, fetch the orders and associated products
+      const ordersWithProducts = await Promise.all(
+        result.map(async (vehicle) => {
+          const orderSql = `SELECT DISTINCT order_id, customer_loc, total_sum_price
                               FROM tblorders_customer
                               WHERE vehicle_plate = ?
                               AND status = "READY"
                               ORDER BY order_id DESC`;
 
-            const orders = await new Promise((resolve, reject) => {
-              db.query(orderSql, [vehicle.vehicle_plate], (err, orders) => {
-                if (err) {
-                  return reject(err);
-                }
-                resolve(orders);
-              });
+          const orders = await new Promise((resolve, reject) => {
+            db.query(orderSql, [vehicle.vehicle_plate], (err, orders) => {
+              if (err) {
+                return reject(err);
+              }
+              resolve(orders);
             });
+          });
 
-            // Fetch products for each order
-            const enrichedOrders = await Promise.all(
-              orders.map(async (order) => {
-                const productSql = `SELECT * 
+          // Fetch products for each order
+          const enrichedOrders = await Promise.all(
+            orders.map(async (order) => {
+              const productSql = `SELECT * 
                                     FROM tblorders_customer 
                                     WHERE order_id = ? 
                                     AND status = "READY"`;
 
-                const products = await new Promise((resolve, reject) => {
-                  db.query(productSql, [order.order_id], (err, products) => {
-                    if (err) {
-                      return reject(err);
-                    }
-                    resolve(products);
-                  });
+              const products = await new Promise((resolve, reject) => {
+                db.query(productSql, [order.order_id], (err, products) => {
+                  if (err) {
+                    return reject(err);
+                  }
+                  resolve(products);
                 });
+              });
 
-                return {
-                  order_id: order.order_id,
-                  customer_loc: order.customer_loc,
-                  total_sum_price: order.total_sum_price,
-                  products,
-                };
-              })
-            );
+              return {
+                order_id: order.order_id,
+                customer_loc: order.customer_loc,
+                total_sum_price: order.total_sum_price,
+                products,
+              };
+            })
+          );
 
-            // Add the enriched order data to the vehicle
-            return {
-              vehicle_plate: vehicle.vehicle_plate,
-              rider: vehicle.rider,
-              vehicle_type: vehicle.vehicle_type,
-              vehicle_available: vehicle.vehicle_available,
-              orders: enrichedOrders,
-            };
-          })
-        );
+          // Add the enriched order data to the vehicle
+          return {
+            vehicle_plate: vehicle.vehicle_plate,
+            rider: vehicle.rider,
+            vehicle_type: vehicle.vehicle_type,
+            vehicle_available: vehicle.vehicle_available,
+            orders: enrichedOrders,
+          };
+        })
+      );
 
-        // Respond with the fully enriched data
-        return res
-          .status(200)
-          .json({ status: "success", res: ordersWithProducts });
-      } catch (err) {
-        console.error("Error fetching orders/products:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
-    });
+      // Respond with the fully enriched data
+      return res
+        .status(200)
+        .json({ status: "success", res: ordersWithProducts });
+    } catch (err) {
+      console.error("Error fetching orders/products:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
   });
+});
 
-  app.post("/api/status_transit/", async (req, res) => {
+app.post("/api/status_transit/", async (req, res) => {
+  const { plate } = req.body;
+
+  const date_and_time = new Date();
+
+  // Convert to Manila time (Asia/Manila timezone)
+  const options = {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false, // Use 24-hour format
+  };
+
+  const manilaTime = new Intl.DateTimeFormat("en-PH", options).format(
+    date_and_time
+  );
+
+  // Manually replace the slashes (/) with hyphens (-) and remove the comma ","
+  const formattedDateTime = manilaTime.replace(
+    /(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2})/g,
+    "$1-$2-$3 $4:$5"
+  );
+
+  try {
+    // Update the status and set the current time in tblorders_customer
+    const query1 = `
+        UPDATE tblorders_customer 
+        SET status = "Transit", time_out = ?
+        WHERE vehicle_plate = ?`;
+
+    await db.query(query1, [formattedDateTime, plate], (err, result1) => {
+      if (err) {
+        console.error("Error updating order status and time_out:", err);
+        return res.status(500).json({ message: " Internal server error" });
+      }
+
+      // Update vehicle_available in tblvehicle
+      const query2 = `UPDATE tblvehicle SET vehicle_available = 0 WHERE vehicle_plate = ?`;
+
+      db.query(query2, [plate], (err, result2) => {
+        if (err) {
+          console.error("Error updating vehicle availability:", err);
+          return res.status(500).json({ message: "Internal server error" });
+        }
+
+        return res.status(200).json({
+          status: "success",
+          message:
+            "Order status, time_out, and vehicle availability updated successfully.",
+        });
+      });
+    });
+  } catch (error) {
+    console.error("Error in status_transit API:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// ** READY TO GO MODULE **//
+
+// ** TRANSIT ** //
+
+//fetch transit
+app.get("/api/transit/", (req, res) => {
+  const sql = `SELECT DISTINCT v.vehicle_plate, v.rider, v.vehicle_type, v.vehicle_available
+                FROM tblorders_customer c
+                JOIN tblvehicle v ON c.vehicle_plate = v.vehicle_plate
+                WHERE c.status = "Transit";`;
+
+  db.query(sql, async (err, result) => {
+    if (err) {
+      console.error("Error fetching vehicles:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+
+    if (!result || result.length === 0) {
+      return res
+        .status(200)
+        .json({ status: "success", message: "No transit orders found." });
+    }
+
+    try {
+      // For each vehicle_plate, fetch the orders and associated products
+      const ordersWithProducts = await Promise.all(
+        result.map(async (vehicle) => {
+          const orderSql = `SELECT DISTINCT order_id, customer_loc, customer_name,total_sum_price, time_out, mop
+                              FROM tblorders_customer
+                              WHERE vehicle_plate = ?
+                              AND status = "Transit"
+                              ORDER BY order_id DESC`;
+
+          const orders = await new Promise((resolve, reject) => {
+            db.query(orderSql, [vehicle.vehicle_plate], (err, orders) => {
+              if (err) {
+                return reject(err);
+              }
+              resolve(orders);
+            });
+          });
+
+          // Fetch products for each order
+          const enrichedOrders = await Promise.all(
+            orders.map(async (order) => {
+              const productSql = `SELECT * 
+                                    FROM tblorders_customer 
+                                    WHERE order_id = ? 
+                                    AND status = "Transit"`;
+
+              const products = await new Promise((resolve, reject) => {
+                db.query(productSql, [order.order_id], (err, products) => {
+                  if (err) {
+                    return reject(err);
+                  }
+                  resolve(products);
+                });
+              });
+
+              return {
+                order_id: order.order_id,
+                mop: order.mop,
+                customer_loc: order.customer_loc,
+                customer_name: order.customer_name,
+                total_sum_price: order.total_sum_price,
+                time_out: order.time_out,
+                products,
+              };
+            })
+          );
+
+          // Add the enriched order data to the vehicle
+          return {
+            vehicle_plate: vehicle.vehicle_plate,
+            rider: vehicle.rider,
+            vehicle_type: vehicle.vehicle_type,
+            vehicle_available: vehicle.vehicle_available,
+            orders: enrichedOrders,
+          };
+        })
+      );
+
+      // Respond with the fully enriched data
+      return res
+        .status(200)
+        .json({ status: "success", res: ordersWithProducts });
+    } catch (err) {
+      console.error("Error fetching orders/products:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+  });
+});
+
+//fetch done delivery
+app.get("/api/returned_courier/", (req, res) => {
+  const sql = `SELECT DISTINCT v.vehicle_plate, v.rider, v.vehicle_type, v.vehicle_available
+                FROM tblorders_customer c
+                JOIN tblvehicle v ON c.vehicle_plate = v.vehicle_plate
+                WHERE c.status = "SALES";`;
+
+  db.query(sql, async (err, result) => {
+    if (err) {
+      console.error("Error fetching vehicles:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+
+    if (!result || result.length === 0) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "No pending orders found." });
+    }
+
+    try {
+      // For each vehicle_plate, fetch the orders and associated products
+      const ordersWithProducts = await Promise.all(
+        result.map(async (vehicle) => {
+          const orderSql = `SELECT DISTINCT order_id, customer_loc, customer_name,total_sum_price, time_out, mop
+                              FROM tblorders_customer
+                              WHERE vehicle_plate = ?
+                              AND status = "SALES"
+                              ORDER BY order_id DESC`;
+
+          const orders = await new Promise((resolve, reject) => {
+            db.query(orderSql, [vehicle.vehicle_plate], (err, orders) => {
+              if (err) {
+                return reject(err);
+              }
+              resolve(orders);
+            });
+          });
+
+          // Fetch products for each order
+          const enrichedOrders = await Promise.all(
+            orders.map(async (order) => {
+              const productSql = `SELECT * 
+                                    FROM tblorders_customer 
+                                    WHERE order_id = ? 
+                                    AND status = "SALES"`;
+
+              const products = await new Promise((resolve, reject) => {
+                db.query(productSql, [order.order_id], (err, products) => {
+                  if (err) {
+                    return reject(err);
+                  }
+                  resolve(products);
+                });
+              });
+
+              return {
+                order_id: order.order_id,
+                mop: order.mop,
+                customer_loc: order.customer_loc,
+                customer_name: order.customer_name,
+                total_sum_price: order.total_sum_price,
+                time_out: order.time_out,
+                products,
+              };
+            })
+          );
+
+          // Add the enriched order data to the vehicle
+          return {
+            vehicle_plate: vehicle.vehicle_plate,
+            rider: vehicle.rider,
+            vehicle_type: vehicle.vehicle_type,
+            vehicle_available: vehicle.vehicle_available,
+            orders: enrichedOrders,
+          };
+        })
+      );
+
+      // Respond with the fully enriched data
+      return res
+        .status(200)
+        .json({ status: "success", res: ordersWithProducts });
+    } catch (err) {
+      console.error("Error fetching orders/products:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+  });
+});
+
+app.post("/api/insertSales/", async (req, res) => {
+  try {
     const { plate } = req.body;
 
     const date_and_time = new Date();
@@ -5693,464 +5973,316 @@ const db = mysql.createPool({
       "$1-$2-$3 $4:$5"
     );
 
-    try {
-      // Update the status and set the current time in tblorders_customer
-      const query1 = `
-        UPDATE tblorders_customer 
-        SET status = "Transit", time_out = ?
-        WHERE vehicle_plate = ?`;
+    if (!plate) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Vehicle plate is required" });
+    }
 
-      await db.query(query1, [formattedDateTime, plate], (err, result1) => {
+    const selectQuery =
+      "SELECT * FROM tblorders_customer WHERE vehicle_plate = ?";
+    const orders = await new Promise((resolve, reject) => {
+      db.query(selectQuery, [plate], (err, result) => {
         if (err) {
-          console.error("Error updating order status and time_out:", err);
-          return res.status(500).json({ message: " Internal server error" });
+          return reject(err);
         }
+        resolve(result);
+      });
+    });
 
-        // Update vehicle_available in tblvehicle
-        const query2 = `UPDATE tblvehicle SET vehicle_available = 0 WHERE vehicle_plate = ?`;
+    if (orders.length === 0) {
+      return res.status(404).json({
+        status: "error",
+        message: "No orders found for the given vehicle plate.",
+      });
+    }
 
-        db.query(query2, [plate], (err, result2) => {
-          if (err) {
-            console.error("Error updating vehicle availability:", err);
-            return res.status(500).json({ message: "Internal server error" });
-          }
+    const insertQuery = "INSERT INTO tblsales SET ?";
 
-          return res.status(200).json({
-            status: "success",
-            message:
-              "Order status, time_out, and vehicle availability updated successfully.",
+    await Promise.all(
+      orders.map((order) => {
+        const {
+          status,
+          rider,
+          vehicle_type,
+          vehicle_available,
+          ...ordersWithProducts
+        } = order;
+
+        ordersWithProducts.time_return = formattedDateTime;
+
+        return new Promise((resolve, reject) => {
+          db.query(insertQuery, ordersWithProducts, (err, result) => {
+            if (err) {
+              return reject(err);
+            }
+            resolve(result);
           });
         });
+      })
+    );
+
+    const deleteQuery =
+      "DELETE FROM tblorders_customer WHERE vehicle_plate = ?";
+    await new Promise((resolve, reject) => {
+      db.query(deleteQuery, [plate], (err, result) => {
+        if (err) {
+          return reject(err);
+        }
+        resolve(result);
       });
-    } catch (error) {
-      console.error("Error in status_transit API:", error);
-      res.status(500).json({ message: "Internal server error" });
+    });
+
+    const updateQuery =
+      "UPDATE tblvehicle SET vehicle_available = 1 WHERE vehicle_plate = ?";
+    await new Promise((resolve, reject) => {
+      db.query(updateQuery, [plate], (err, result) => {
+        if (err) {
+          return reject(err);
+        }
+        resolve(result);
+      });
+    });
+
+    return res.status(200).json({ status: "success", message: "Orders done." });
+  } catch (error) {
+    console.error("Error inserting sales: ", error);
+    return res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// Fetch courier done delivery
+app.get("/api/fetchDoneCourier/", (req, res) => {
+  const sql = `SELECT DISTINCT 
+                  ts.time_return, 
+                  ts.vehicle_plate, 
+                  tv.rider, 
+                  tv.vehicle_type
+              FROM 
+                  tblsales ts
+              JOIN 
+                  tblvehicle tv
+              ON 
+                  ts.vehicle_plate = tv.vehicle_plate
+              ORDER BY time_return DESC;`;
+
+  db.query(sql, async (err, result) => {
+    if (err) {
+      console.error("Error fetching vehicles:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
     }
-  });
 
-  // ** READY TO GO MODULE **//
+    if (!result || result.length === 0) {
+      return res
+        .status(200)
+        .json({ status: "success", message: "No transit orders found." });
+    }
 
-  // ** TRANSIT ** //
-
-  //fetch transit
-  app.get("/api/transit/", (req, res) => {
-    const sql = `SELECT DISTINCT v.vehicle_plate, v.rider, v.vehicle_type, v.vehicle_available
-                FROM tblorders_customer c
-                JOIN tblvehicle v ON c.vehicle_plate = v.vehicle_plate
-                WHERE c.status = "Transit";`;
-
-    db.query(sql, async (err, result) => {
-      if (err) {
-        console.error("Error fetching vehicles:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
-
-      if (!result || result.length === 0) {
-        return res
-          .status(200)
-          .json({ status: "success", message: "No transit orders found." });
-      }
-
-      try {
-        // For each vehicle_plate, fetch the orders and associated products
-        const ordersWithProducts = await Promise.all(
-          result.map(async (vehicle) => {
-            const orderSql = `SELECT DISTINCT order_id, customer_loc, customer_name,total_sum_price, time_out, mop
-                              FROM tblorders_customer
-                              WHERE vehicle_plate = ?
-                              AND status = "Transit"
-                              ORDER BY order_id DESC`;
-
-            const orders = await new Promise((resolve, reject) => {
-              db.query(orderSql, [vehicle.vehicle_plate], (err, orders) => {
-                if (err) {
-                  return reject(err);
-                }
-                resolve(orders);
-              });
-            });
-
-            // Fetch products for each order
-            const enrichedOrders = await Promise.all(
-              orders.map(async (order) => {
-                const productSql = `SELECT * 
-                                    FROM tblorders_customer 
-                                    WHERE order_id = ? 
-                                    AND status = "Transit"`;
-
-                const products = await new Promise((resolve, reject) => {
-                  db.query(productSql, [order.order_id], (err, products) => {
-                    if (err) {
-                      return reject(err);
-                    }
-                    resolve(products);
-                  });
-                });
-
-                return {
-                  order_id: order.order_id,
-                  mop: order.mop,
-                  customer_loc: order.customer_loc,
-                  customer_name: order.customer_name,
-                  total_sum_price: order.total_sum_price,
-                  time_out: order.time_out,
-                  products,
-                };
-              })
-            );
-
-            // Add the enriched order data to the vehicle
-            return {
-              vehicle_plate: vehicle.vehicle_plate,
-              rider: vehicle.rider,
-              vehicle_type: vehicle.vehicle_type,
-              vehicle_available: vehicle.vehicle_available,
-              orders: enrichedOrders,
-            };
-          })
-        );
-
-        // Respond with the fully enriched data
-        return res
-          .status(200)
-          .json({ status: "success", res: ordersWithProducts });
-      } catch (err) {
-        console.error("Error fetching orders/products:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
-    });
-  });
-
-  //fetch done delivery
-  app.get("/api/returned_courier/", (req, res) => {
-    const sql = `SELECT DISTINCT v.vehicle_plate, v.rider, v.vehicle_type, v.vehicle_available
-                FROM tblorders_customer c
-                JOIN tblvehicle v ON c.vehicle_plate = v.vehicle_plate
-                WHERE c.status = "SALES";`;
-
-    db.query(sql, async (err, result) => {
-      if (err) {
-        console.error("Error fetching vehicles:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
-
-      if (!result || result.length === 0) {
-        return res
-          .status(404)
-          .json({ status: "error", message: "No pending orders found." });
-      }
-
-      try {
-        // For each vehicle_plate, fetch the orders and associated products
-        const ordersWithProducts = await Promise.all(
-          result.map(async (vehicle) => {
-            const orderSql = `SELECT DISTINCT order_id, customer_loc, customer_name,total_sum_price, time_out, mop
-                              FROM tblorders_customer
-                              WHERE vehicle_plate = ?
-                              AND status = "SALES"
-                              ORDER BY order_id DESC`;
-
-            const orders = await new Promise((resolve, reject) => {
-              db.query(orderSql, [vehicle.vehicle_plate], (err, orders) => {
-                if (err) {
-                  return reject(err);
-                }
-                resolve(orders);
-              });
-            });
-
-            // Fetch products for each order
-            const enrichedOrders = await Promise.all(
-              orders.map(async (order) => {
-                const productSql = `SELECT * 
-                                    FROM tblorders_customer 
-                                    WHERE order_id = ? 
-                                    AND status = "SALES"`;
-
-                const products = await new Promise((resolve, reject) => {
-                  db.query(productSql, [order.order_id], (err, products) => {
-                    if (err) {
-                      return reject(err);
-                    }
-                    resolve(products);
-                  });
-                });
-
-                return {
-                  order_id: order.order_id,
-                  mop: order.mop,
-                  customer_loc: order.customer_loc,
-                  customer_name: order.customer_name,
-                  total_sum_price: order.total_sum_price,
-                  time_out: order.time_out,
-                  products,
-                };
-              })
-            );
-
-            // Add the enriched order data to the vehicle
-            return {
-              vehicle_plate: vehicle.vehicle_plate,
-              rider: vehicle.rider,
-              vehicle_type: vehicle.vehicle_type,
-              vehicle_available: vehicle.vehicle_available,
-              orders: enrichedOrders,
-            };
-          })
-        );
-
-        // Respond with the fully enriched data
-        return res
-          .status(200)
-          .json({ status: "success", res: ordersWithProducts });
-      } catch (err) {
-        console.error("Error fetching orders/products:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
-    });
-  });
-
-  app.post("/api/insertSales/", async (req, res) => {
     try {
-      const { plate } = req.body;
+      // For each distinct vehicle_plate and time_return, fetch the orders and products
+      const ordersWithProducts = await Promise.all(
+        result.map(async (vehicle) => {
+          const orderSql = `SELECT DISTINCT order_id, customer_loc, customer_name, total_sum_price, time_out, time_return, mop
+                              FROM tblsales
+                              WHERE vehicle_plate = ? AND time_return = ?
+                              ORDER BY order_id DESC`;
 
-      const date_and_time = new Date();
-
-      // Convert to Manila time (Asia/Manila timezone)
-      const options = {
-        timeZone: "Asia/Manila",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false, // Use 24-hour format
-      };
-
-      const manilaTime = new Intl.DateTimeFormat("en-PH", options).format(
-        date_and_time
-      );
-
-      // Manually replace the slashes (/) with hyphens (-) and remove the comma ","
-      const formattedDateTime = manilaTime.replace(
-        /(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2})/g,
-        "$1-$2-$3 $4:$5"
-      );
-
-      if (!plate) {
-        return res
-          .status(400)
-          .json({ status: "error", message: "Vehicle plate is required" });
-      }
-
-      const selectQuery =
-        "SELECT * FROM tblorders_customer WHERE vehicle_plate = ?";
-      const orders = await new Promise((resolve, reject) => {
-        db.query(selectQuery, [plate], (err, result) => {
-          if (err) {
-            return reject(err);
-          }
-          resolve(result);
-        });
-      });
-
-      if (orders.length === 0) {
-        return res.status(404).json({
-          status: "error",
-          message: "No orders found for the given vehicle plate.",
-        });
-      }
-
-      const insertQuery = "INSERT INTO tblsales SET ?";
-
-      await Promise.all(
-        orders.map((order) => {
-          const {
-            status,
-            rider,
-            vehicle_type,
-            vehicle_available,
-            ...ordersWithProducts
-          } = order;
-
-          ordersWithProducts.time_return = formattedDateTime;
-
-          return new Promise((resolve, reject) => {
-            db.query(insertQuery, ordersWithProducts, (err, result) => {
+          const orders = await new Promise((resolve, reject) => {
+            db.query(orderSql, [vehicle.vehicle_plate, vehicle.time_return], (err, orders) => {
               if (err) {
                 return reject(err);
               }
-              resolve(result);
+              resolve(orders);
             });
           });
+
+          // Fetch products for each order
+          const enrichedOrders = await Promise.all(
+            orders.map(async (order) => {
+              const productSql = `SELECT * 
+                                    FROM tblsales 
+                                    WHERE order_id = ?`;
+
+              const products = await new Promise((resolve, reject) => {
+                db.query(productSql, [order.order_id], (err, products) => {
+                  if (err) {
+                    return reject(err);
+                  }
+                  resolve(products);
+                });
+              });
+
+              return {
+                order_id: order.order_id,
+                mop: order.mop,
+                customer_loc: order.customer_loc,
+                customer_name: order.customer_name,
+                total_sum_price: order.total_sum_price,
+                time_out: order.time_out,
+                products,
+              };
+            })
+          );
+
+          // Add the enriched order data to the vehicle
+          return {
+            vehicle_plate: vehicle.vehicle_plate,
+            rider: vehicle.rider,
+            vehicle_type: vehicle.vehicle_type,
+            time_return: vehicle.time_return,
+            orders: enrichedOrders,
+          };
         })
       );
 
-      const deleteQuery =
-        "DELETE FROM tblorders_customer WHERE vehicle_plate = ?";
-      await new Promise((resolve, reject) => {
-        db.query(deleteQuery, [plate], (err, result) => {
-          if (err) {
-            return reject(err);
-          }
-          resolve(result);
-        });
-      });
-
-      const updateQuery =
-        "UPDATE tblvehicle SET vehicle_available = 1 WHERE vehicle_plate = ?";
-      await new Promise((resolve, reject) => {
-        db.query(updateQuery, [plate], (err, result) => {
-          if (err) {
-            return reject(err);
-          }
-          resolve(result);
-        });
-      });
-
-      return res.status(200).json({ status: "success", message: "Orders done." });
-    } catch (error) {
-      console.error("Error inserting sales: ", error);
-      return res.status(500).json({ status: "error", message: error.message });
+      // Respond with the fully enriched data
+      return res
+        .status(200)
+        .json({ status: "success", res: ordersWithProducts });
+    } catch (err) {
+      console.error("Error fetching orders/products:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
     }
   });
+});
 
-  // ** TRANSIT ** //
+// ** TRANSIT ** //
+
+// ** SALES MODULE ** // 
 
 
-  /*
+
+// ** SALES MODULE ** //
+
+/*
   SALES
   */
 
-  /*
+/*
   CUSTOMER
   */
 
-  //FETCH MODE OF PAYMENT TABLE
-  app.get("/api/fetchmop/", (req, res) => {
-    const sql = `SELECT * FROM tbl_mop`;
+//FETCH MODE OF PAYMENT TABLE
+app.get("/api/fetchmop/", (req, res) => {
+  const sql = `SELECT * FROM tbl_mop`;
 
-    db.query(sql, (err, result) => {
-      if (err) {
-        console.error("Error fetching modes of payment:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
-      if (!result || result.length === 0) {
-        return res
-          .status(404)
-          .json({ status: "error", message: "No modes of payment found." });
-      }
-      return res.status(200).json({ status: "success", res: result });
-    });
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error("Error fetching modes of payment:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+    if (!result || result.length === 0) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "No modes of payment found." });
+    }
+    return res.status(200).json({ status: "success", res: result });
   });
+});
 
-  app.get("/api/api-get-customer-info/:userId", async (req, res) => {
-    try {
-      const userId = req.params.userId;
-      const sql = `
+app.get("/api/api-get-customer-info/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const sql = `
     SELECT c.name, c.location
     FROM tblusers u 
     LEFT JOIN tblcustomer c ON c.customer_id = u.id 
     WHERE u.id = '${userId}'
   `;
-      await db.query(sql, (err, result) => {
-        console.log(result[0]);
-        return res.status(200).json({ status: "success", res: result[0] });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+    await db.query(sql, (err, result) => {
+      console.log(result[0]);
+      return res.status(200).json({ status: "success", res: result[0] });
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
-  app.get("/api/api-items", async (req, res) => {
-    try {
-      const sql = `SELECT * FROM tblitems`;
-      await db.query(sql, (err, result) => {
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+app.get("/api/api-items", async (req, res) => {
+  try {
+    const sql = `SELECT * FROM tblitems`;
+    await db.query(sql, (err, result) => {
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
-  app.post("/api/api-insert-to-cart", async (req, res) => {
-    const isOrdered = "0";
-    const {
-      selectedProduct,
-      itemName,
-      price,
-      description,
-      quantity,
-      totalPrice,
-      customerId,
-      customerName,
-      customerLoc,
-    } = req.body;
+app.post("/api/api-insert-to-cart", async (req, res) => {
+  const isOrdered = "0";
+  const {
+    selectedProduct,
+    itemName,
+    price,
+    description,
+    quantity,
+    totalPrice,
+    customerId,
+    customerName,
+    customerLoc,
+  } = req.body;
 
-    // if (
-    //   !itemId ||
-    //   !itemName ||
-    //   !price ||
-    //   !description ||
-    //   !quantity ||
-    //   !totalPrice
-    // ) {
-    //   return res.status(400).json({ message: "All fields are required." });
-    // }
-    try {
-      const sql = `INSERT INTO tblcart 
+  // if (
+  //   !itemId ||
+  //   !itemName ||
+  //   !price ||
+  //   !description ||
+  //   !quantity ||
+  //   !totalPrice
+  // ) {
+  //   return res.status(400).json({ message: "All fields are required." });
+  // }
+  try {
+    const sql = `INSERT INTO tblcart 
       (item_id, item_name, price, description, qty, total_price, isOrdered, customer_id, customer_name, customer_loc) 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-      await db.query(
-        sql,
-        [
-          selectedProduct,
-          itemName,
-          price,
-          description,
-          quantity,
-          totalPrice,
-          isOrdered,
-          customerId,
-          customerName,
-          customerLoc,
-        ],
-        (err, result) => {
-          if (err) {
-            return res.status(500).json({ message: err });
-          }
-
-          return res.status(200).json({
-            message: "Added to cart successfully.",
-            status: "success",
-            res: result,
-          });
+    await db.query(
+      sql,
+      [
+        selectedProduct,
+        itemName,
+        price,
+        description,
+        quantity,
+        totalPrice,
+        isOrdered,
+        customerId,
+        customerName,
+        customerLoc,
+      ],
+      (err, result) => {
+        if (err) {
+          return res.status(500).json({ message: err });
         }
-      );
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
 
-  app.get("/api/mycart/:userId", async (req, res) => {
-    try {
-      const userId = req.params.userId;
+        return res.status(200).json({
+          message: "Added to cart successfully.",
+          status: "success",
+          res: result,
+        });
+      }
+    );
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
-      const sql = `SELECT item_id, item_name, description, price, 
+app.get("/api/mycart/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
+
+    const sql = `SELECT item_id, item_name, description, price, 
       SUM(qty) AS qty,
       SUM(total_price) AS total_price
       FROM tblcart 
@@ -6158,70 +6290,70 @@ const db = mysql.createPool({
       AND customer_id = ${userId} 
       GROUP BY item_name, price;`;
 
-      await db.query(sql, (err, result) => {
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+    await db.query(sql, (err, result) => {
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
-  //REMOVE ITEM IN CART
-  // DELETE Route to delete an item using request body
-  app.delete("/api/remove-prod-cart", async (req, res) => {
-    const { item_id, user_id } = req.body; // get item_id and user_id
+//REMOVE ITEM IN CART
+// DELETE Route to delete an item using request body
+app.delete("/api/remove-prod-cart", async (req, res) => {
+  const { item_id, user_id } = req.body; // get item_id and user_id
 
-    try {
-      const query = `DELETE FROM tblcart WHERE item_id = ? AND customer_id = ?`; // Parameterized query
-      await db.query(query, [item_id, user_id], (err, result) => {
-        // console.log(err);
-        if (err) {
-          return res.status(500).json({
-            status: "failed",
-            message: "Error removing product from cart",
-          });
-        }
-        return res
-          .status(200)
-          .json({ status: "success", message: "Product removed from cart" });
-      });
-    } catch (error) {
-      console.error("Error deleting item:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+  try {
+    const query = `DELETE FROM tblcart WHERE item_id = ? AND customer_id = ?`; // Parameterized query
+    await db.query(query, [item_id, user_id], (err, result) => {
+      // console.log(err);
+      if (err) {
+        return res.status(500).json({
+          status: "failed",
+          message: "Error removing product from cart",
+        });
+      }
+      return res
+        .status(200)
+        .json({ status: "success", message: "Product removed from cart" });
+    });
+  } catch (error) {
+    console.error("Error deleting item:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
-  //checkout
-  app.post("/api/checkout_cus", async (req, res) => {
-    const {
-      userId,
-      payment,
-      refNo,
-      cartItems,
-      totalSum,
-      customerId,
-      customerName,
-      customerLoc,
-    } = req.body;
+//checkout
+app.post("/api/checkout_cus", async (req, res) => {
+  const {
+    userId,
+    payment,
+    refNo,
+    cartItems,
+    totalSum,
+    customerId,
+    customerName,
+    customerLoc,
+  } = req.body;
 
-    if (!userId || !cartItems || cartItems.length === 0) {
-      return res.status(400).json({ message: "Invalid data provided" });
-    }
+  if (!userId || !cartItems || cartItems.length === 0) {
+    return res.status(400).json({ message: "Invalid data provided" });
+  }
 
-    const order_id = `ORD-${Date.now()}`;
-    const currentDate = new Date()
-      .toLocaleDateString("en-PH", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      })
-      .replace(/\//g, "-");
-    const defaultStatus = "Pending";
+  const order_id = `ORD-${Date.now()}`;
+  const currentDate = new Date()
+    .toLocaleDateString("en-PH", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+    .replace(/\//g, "-");
+  const defaultStatus = "Pending";
 
-    try {
-      for (const item of cartItems) {
-        const sql = `
+  try {
+    for (const item of cartItems) {
+      const sql = `
           INSERT INTO tblorders_customer (
             order_id,
             mop,
@@ -6240,194 +6372,213 @@ const db = mysql.createPool({
           )
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
-        await db.query(sql, [
-          order_id,
-          payment,
-          refNo,
-          item.item_name,
-          item.description,
-          item.price,
-          item.qty,
-          item.total_price,
-          totalSum,
-          defaultStatus,
-          currentDate,
-          customerId,
-          customerName,
-          customerLoc,
-        ]);
+      await db.query(sql, [
+        order_id,
+        payment,
+        refNo,
+        item.item_name,
+        item.description,
+        item.price,
+        item.qty,
+        item.total_price,
+        totalSum,
+        defaultStatus,
+        currentDate,
+        customerId,
+        customerName,
+        customerLoc,
+      ]);
+    }
+
+    // Optionally clear the cart after successful checkout
+    const clearCartSql = `DELETE FROM tblcart WHERE customer_id = ?`;
+    await db.query(clearCartSql, [userId]);
+
+    res.status(200).json({ message: "Order placed successfully." });
+  } catch (error) {
+    console.error("Error during checkout:", error);
+    res.status(500).json({ message: "Checkout failed. Please try again." });
+  }
+});
+
+//fetch orders of customer (tblorder_customer) PENDING AND COMPLETED
+app.get("/api/orders_customer/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
+
+    const sql = `SELECT DISTINCT *
+      FROM tblorders_customer
+      WHERE customer_id = ${userId} 
+        AND status != 'Cancelled'
+      GROUP BY order_id
+      ORDER BY date DESC, order_id DESC;
+      `;
+
+    db.query(sql, (err, result) => {
+      if (err) {
+        console.error("Error fetching orders:", err);
+        return res
+          .status(500)
+          .json({ status: "error", message: "Internal server error" });
       }
 
-      // Optionally clear the cart after successful checkout
-      const clearCartSql = `DELETE FROM tblcart WHERE customer_id = ?`;
-      await db.query(clearCartSql, [userId]);
+      if (!result || result.length === 0) {
+        return res
+          .status(200)
+          .json({ status: "success", res: "No pending orders found." });
+      }
 
-      res.status(200).json({ message: "Order placed successfully." });
-    } catch (error) {
-      console.error("Error during checkout:", error);
-      res.status(500).json({ message: "Checkout failed. Please try again." });
-    }
-  });
+      const orders = [];
 
-  //fetch orders of customer (tblorder_customer) PENDING AND COMPLETED
-  app.get("/api/orders_customer/:userId", async (req, res) => {
-    try {
-      const userId = req.params.userId;
-
-      const sql = `SELECT DISTINCT order_id, mop, ref_no, total_sum_price, status, date 
+      // Use async function inside a loop to handle multiple queries
+      const fetchProductsForOrder = (order) => {
+        return new Promise((resolve, reject) => {
+          const productSql = `SELECT *
                   FROM tblorders_customer 
-                  WHERE customer_id = ${userId} 
-                    AND status IN ("Pending", "Transit", "Completed") -- Include only Pending and Completed statuses
-                  ORDER BY 
-                    CASE 
-                      WHEN status = "Pending" THEN 1 
-                      WHEN status = "Transit" THEN 2 
-                      WHEN status = "Completed" THEN 3 
-                      ELSE 4
-                    END,
-                    date DESC;`;
+                  WHERE order_id = ? 
+                  ORDER BY order_id DESC;`;
 
-      // const sql = `SELECT DISTINCT order_id, total_sum_price, status, date
-      //              FROM tblorders_customer
-      //              WHERE customer_id = ${userId}
-      //              AND status = "Pending"
-      //              ORDER BY date DESC;`;
+          db.query(productSql, [order.order_id], (err, products) => {
+            if (err) {
+              return reject(err);
+            }
+            resolve({ ...order, products });
+          });
+        });
+      };
 
-      await db.query(sql, (err, result) => {
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+      const fetchAllOrders = async () => {
+        try {
+          const ordersWithProducts = await Promise.all(
+            result.map((order) => fetchProductsForOrder(order))
+          );
 
-  //fetch orders of customer (tblorder_customer) PREPARING
-  app.get("/api/orders_preparing/:userId", async (req, res) => {
-    try {
-      const userId = req.params.userId;
+          return res
+            .status(200)
+            .json({ status: "success", res: ordersWithProducts });
+        } catch (err) {
+          console.error("Error fetching products:", err);
+          return res
+            .status(500)
+            .json({ status: "error", message: "Internal server error" });
+        }
+      };
 
-      const sql = `SELECT DISTINCT order_id, mop, ref_no, total_sum_price, status, date 
-                  FROM tblorders_customer 
-                  WHERE customer_id = ${userId} 
-                    AND status = "Preparing"
-                    ORDER BY date DESC;`;
+      fetchAllOrders();
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
-      // const sql = `SELECT DISTINCT order_id, total_sum_price, status, date
-      //              FROM tblorders_customer
-      //              WHERE customer_id = ${userId}
-      //              AND status = "Pending"
-      //              ORDER BY date DESC;`;
+app.get("/api/orders_customer_cancelled/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
 
-      await db.query(sql, (err, result) => {
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  //fetch orders of customer (tblorder_customer) PREPARED
-  app.get("/api/orders_prepared/:userId", async (req, res) => {
-    try {
-      const userId = req.params.userId;
-
-      const sql = `SELECT DISTINCT order_id, mop, ref_no, total_sum_price, status, date 
-                  FROM tblorders_customer 
-                  WHERE customer_id = ${userId} 
-                    AND status = "Prepared"
-                    ORDER BY date DESC;`;
-
-      await db.query(sql, (err, result) => {
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  //fetch orders of customer (tblorder_customer) Transit
-  app.get("/api/orders_transit/:userId", async (req, res) => {
-    try {
-      const userId = req.params.userId;
-
-      const sql = `SELECT DISTINCT order_id, mop, ref_no, total_sum_price, status, date 
-                  FROM tblorders_customer 
-                  WHERE customer_id = ${userId} 
-                    AND status = "Transit"
-                    ORDER BY date DESC;`;
-
-      await db.query(sql, (err, result) => {
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  app.get("/api/orders_customer_cancelled/:userId", async (req, res) => {
-    try {
-      const userId = req.params.userId;
-
-      const sql = `SELECT DISTINCT order_id, mop, ref_no, total_sum_price, status, date 
+    const sql = `SELECT DISTINCT order_id, mop, ref_no, total_sum_price, status, date 
                   FROM tblorders_customer 
                   WHERE customer_id = ${userId} 
                   AND status = "Cancelled"
                   ORDER BY order_id ASC;`;
 
-      await db.query(sql, (err, result) => {
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+    await db.query(sql, (err, result) => {
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
-  // fetch products of order
-  app.post("/api/orders_products/", async (req, res) => {
-    const { userId, orderId } = req.body;
-    try {
-      const query = `SELECT * FROM tblorders_customer WHERE customer_id = ? AND order_id = ?`;
-      await db.query(query, [userId, orderId], (err, result) => {
-        if (err) {
-          console.error("Error executing query:", err);
-          return res.status(500).json({ message: "Internal server error" });
-        }
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+// fetch products of order
+app.get("/api/orders_products/:userId", (req, res) => {
+  const { userId } = req.body;
 
-  // CANCELLING ORDER
-  app.post("/api/cancelled_order/", async (req, res) => {
-    const { orderId } = req.body;
-    try {
-      const query = `UPDATE tblorders_customer 
+  const sql = `SELECT DISTINCT *
+    FROM tblorders_customer 
+    WHERE status = "PENDING" 
+    GROUP BY order_id
+    ORDER BY date DESC, order_id DESC;`;
+
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error("Error fetching orders:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+
+    if (!result || result.length === 0) {
+      return res
+        .status(200)
+        .json({ status: "success", res: "No pending orders found." });
+    }
+
+    const orders = [];
+
+    // Use async function inside a loop to handle multiple queries
+    const fetchProductsForOrder = (order) => {
+      return new Promise((resolve, reject) => {
+        const productSql = `SELECT *
+                  FROM tblorders_customer 
+                  WHERE order_id = ? 
+                  ORDER BY order_id DESC;`;
+
+        db.query(productSql, [order.order_id], (err, products) => {
+          if (err) {
+            return reject(err);
+          }
+          resolve({ ...order, products });
+        });
+      });
+    };
+
+    const fetchAllOrders = async () => {
+      try {
+        const ordersWithProducts = await Promise.all(
+          result.map((order) => fetchProductsForOrder(order))
+        );
+
+        return res
+          .status(200)
+          .json({ status: "success", res: ordersWithProducts });
+      } catch (err) {
+        console.error("Error fetching products:", err);
+        return res
+          .status(500)
+          .json({ status: "error", message: "Internal server error" });
+      }
+    };
+
+    fetchAllOrders();
+  });
+});
+
+// CANCELLING ORDER
+app.post("/api/cancelled_order/", async (req, res) => {
+  const { orderId } = req.body;
+  try {
+    const query = `UPDATE tblorders_customer 
                     SET status = "Cancelled"
                     WHERE order_id = ?`;
-      await db.query(query, [orderId], (err, result) => {
-        if (err) {
-          console.error("Error executing query:", err);
-          return res.status(500).json({ message: "Internal server error" });
-        }
-        return res.status(200).json({ status: "success", res: result });
-      });
-    } catch (error) {
-      console.error("Error fetching customer name:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+    await db.query(query, [orderId], (err, result) => {
+      if (err) {
+        console.error("Error executing query:", err);
+        return res.status(500).json({ message: "Internal server error" });
+      }
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
-  /*
+/*
   CUSTOMER
   */
   app.listen(port, () => {
     console.log(`Server running at http://${localIP}:${port}`);
   });
+
