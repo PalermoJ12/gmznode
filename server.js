@@ -46,13 +46,22 @@
   //   database: "dbgmz",
   // });
 
-  const db = mysql.createPool({
-    host: "srv1154.hstgr.io",
-    user: "u319302750_dbgmzadmin",
-    password: "Dbgmzadmin112024!",
-    database: "u319302750_dbgmz",
-    connectionLimit: 10,
-  });
+  // const db = mysql.createPool({
+  //   host: "srv1154.hstgr.io",
+  //   user: "u319302750_dbgmzadmin",
+  //   password: "Dbgmzadmin112024!",
+  //   database: "u319302750_dbgmz",
+  //   connectionLimit: 10,
+  // });
+
+const db = mysql.createPool({
+  host: "localhost",
+  user: "root",
+  password: "", // Or the password you set for root
+  database: "u319302750_dbgmz",
+  connectionLimit: 10,
+});
+
 
   db.getConnection((err, connection) => {
     if (err) {
