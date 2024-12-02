@@ -1517,7 +1517,7 @@ app.get("/api/rawmats", async (req, res) => {
 app.post("/api/addmats", (req, res) => {
   const { matName, category } = req.body; // Use matName to match the frontend
   const sql =
-    "INSERT INTO tblRawMats (matName, quantity, category) VALUES (?, 0, ?)";
+    "INSERT INTO tblrawmats (matName, quantity, category) VALUES (?, 0, ?)";
   db.query(sql, [matName, category], (err, result) => {
     if (err) {
       console.error("Error adding inventory item:", err);
@@ -1530,7 +1530,7 @@ app.post("/api/addmats", (req, res) => {
 // Fetch item by ID
 app.get("/api/updatemats/:matId", (req, res) => {
   const { matId } = req.params;
-  const sql = "SELECT * FROM tblRawMats WHERE matId = ?"; // Correct table name and field
+  const sql = "SELECT * FROM tblrawmats WHERE matId = ?"; // Correct table name and field
 
   db.query(sql, [matId], (err, result) => {
     if (err) {
@@ -1550,7 +1550,7 @@ app.put("/api/updatemats/:matId", (req, res) => {
   const { matName, quantity, category } = req.body;
 
   const sql =
-    "UPDATE tblRawMats SET matName = ?, quantity = ?, category = ? WHERE matId = ?";
+    "UPDATE tblrawmats SET matName = ?, quantity = ?, category = ? WHERE matId = ?";
 
   db.query(sql, [matName, quantity, category, matId], (err, result) => {
     if (err) {
@@ -1570,7 +1570,7 @@ app.put("/api/updatemats/:matId", (req, res) => {
 //deleting item in inventory
 app.delete("/api/deletemats/:id", (req, res) => {
   const { id } = req.params;
-  const sql = "DELETE FROM tblRawMats WHERE matId = ?";
+  const sql = "DELETE FROM tblrawmats WHERE matId = ?";
 
   db.query(sql, [id], (err, result) => {
     if (err) {
@@ -3101,7 +3101,7 @@ app.put("/api/updatesupplydelivery/:supDeliId", (req, res) => {
 
   // Query to update the quantity of raw materials in tblRawMats
   const updateRawMatsQuery = `
-          UPDATE tblRawMats 
+          UPDATE tblrawmats 
           SET quantity = quantity + ? 
           WHERE matId = ?;
       `;
