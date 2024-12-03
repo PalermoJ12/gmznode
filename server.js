@@ -63,7 +63,6 @@ const db = mysql.createPool({
   connectionLimit: 10          // Connection limit (adjust if necessary)
 });
 
-
 db.getConnection((err, connection) => {
   if (err) {
     console.error("Error connecting to the database:", err);
@@ -116,7 +115,7 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.post("/api/register", async (req, res) => {
-  const { username, password, name, location } = req.body;
+  const { username, password, name, location, contactNo, email } = req.body;
 
   // Check if username already exists
   db.query(
@@ -140,8 +139,14 @@ app.post("/api/register", async (req, res) => {
 
         // Insert customer information
         const customerQuery =
-          "INSERT INTO tblcustomer (customer_id,name, location) VALUES (?,?, ?)";
-        const customerValues = [result.insertId, name, location];
+          "INSERT INTO tblcustomer (customer_id,name, location, contact_no, email) VALUES (?,?,?,?,?)";
+        const customerValues = [
+          result.insertId,
+          name,
+          location,
+          contactNo,
+          email,
+        ];
         db.query(customerQuery, customerValues, (err, customerResult) => {
           if (err) {
             console.log(err);
@@ -230,7 +235,7 @@ app.get("/api/accounts", async (req, res) => {
   const sql = `
       SELECT 
         u.id, u.username, u.password, u.access, 
-        c.name AS customer_name, c.location AS customer_location
+        c.name AS name, c.location AS location  , c.email as email , c.contact_no
       FROM tblusers u
       LEFT JOIN tblcustomer c ON u.id = c.customer_id
       ORDER BY u.access , u.id ASC;`;
@@ -251,7 +256,7 @@ app.get("/api/accounts", async (req, res) => {
 // POST add new account with optional customer info if access = 4
 // POST add new account with optional customer info if access = 4
 app.post("/api/addaccount", async (req, res) => {
-  const { username, password, access, name, location } = req.body;
+  const { username, password, access, name, location , email, contact_no } = req.body;
 
   const sql = `INSERT INTO tblusers (username, password, access) VALUES (?, ?, ?)`;
   try {
@@ -259,8 +264,8 @@ app.post("/api/addaccount", async (req, res) => {
 
     if (access == 4) {
       // If the role is Customer, add customer info
-      const customerSql = `INSERT INTO tblcustomer (customer_id, name, location) VALUES (?, ?, ?)`;
-      await queryAsync(customerSql, [result.insertId, name, location]);
+      const customerSql = `INSERT INTO tblcustomer (customer_id, name, location , contact_no, email) VALUES (?, ?, ?,?, ?)`;
+      await queryAsync(customerSql, [result.insertId, name, location, contact_no , email]);
     }
 
     res.status(201).json({ message: "Account added successfully." });
@@ -273,46 +278,62 @@ app.post("/api/addaccount", async (req, res) => {
 // POST edit an account with optional customer info if access = 4
 // POST edit an account with optional customer info if access = 4
 app.post("/api/editaccount/:id", async (req, res) => {
-  var {
+  const {
     id,
     username,
     password,
     access,
-    customerInfo,
     name,
     location,
+    contact_no,
+    email,
     customer_name,
     customer_location,
   } = req.body;
 
   console.log("editaccount>>", req.body);
-  const sql = `UPDATE tblusers SET username = ?, password = ?, access = ? WHERE id = ?`;
+
+  const updateUserSql = `UPDATE tblusers SET username = ?, password = ?, access = ? WHERE id = ?`;
   try {
-    await queryAsync(sql, [username, password, access, id]);
+    // Update main user details
+    await queryAsync(updateUserSql, [username, password, access, id]);
 
     if (access == 4) {
-      if (!name) {
-        name = customer_name;
-      }
+      // Handle Customer-specific details
+      const checkCustomerSql = `SELECT * FROM tblcustomer WHERE customer_id = ?`;
+      const existingCustomer = await queryAsync(checkCustomerSql, id);
 
-      if (!location) {
-        location = customer_location;
-      }
+      if (!name) name = customer_name;
+      if (!location) location = customer_location;
 
-      const checkSql = `SELECT * FROM tblcustomer WHERE customer_id = ?`;
-      const existingCustomer = await queryAsync(checkSql, id);
-      console.log("existing customer", existingCustomer);
       if (existingCustomer.length > 0) {
-        // Update existing customer info
-        const updateCustomerSql = `UPDATE tblcustomer SET name = ?, location = ? WHERE customer_id = ?`;
-        await queryAsync(updateCustomerSql, [name, location, id]);
+        // Update customer information
+        const updateCustomerSql = `
+          UPDATE tblcustomer 
+          SET name = ?, location = ?, contact_no = ?, email = ? 
+          WHERE customer_id = ?`;
+        await queryAsync(updateCustomerSql, [
+          name,
+          location,
+          contact_no,
+          email,
+          id,
+        ]);
       } else {
-        // Insert new customer info
-        const insertCustomerSql = `INSERT INTO tblcustomer (customer_id, name, location) VALUES (?, ?, ?)`;
-        await queryAsync(insertCustomerSql, [id, customer_name, customer_name]);
+        // Insert new customer record if it doesn't exist
+        const insertCustomerSql = `
+          INSERT INTO tblcustomer (customer_id, name, location, contact_no, email) 
+          VALUES (?, ?, ?, ?, ?)`;
+        await queryAsync(insertCustomerSql, [
+          id,
+          name,
+          location,
+          contact_no,
+          email,
+        ]);
       }
-    } else if (access != 4) {
-      // If role is no longer "Customer," remove customer info
+    } else {
+      // If role is no longer "Customer," remove customer details
       const deleteCustomerSql = `DELETE FROM tblcustomer WHERE customer_id = ?`;
       await queryAsync(deleteCustomerSql, [id]);
     }
@@ -824,7 +845,7 @@ app.post("/api/documents/mark-as-read", (req, res) => {
 
 app.get("/api/customer-orders", (req, res) => {
   const query =
-    "SELECT order_id as ID , mop , total_sum_price as Total FROM tblorders_customer GROUP BY order_id";
+    "SELECT order_id as ID , mop , total_sum_price as Total FROM tblorders_customer WHERE status = 'Transit' GROUP BY order_id";
   db.query(query, (error, results) => {
     if (error) {
       console.error("Error fetching customer orders:", error);
@@ -900,7 +921,8 @@ app.get("/api/dashboard", async (req, res) => {
         FROM tblitems it 
         LEFT JOIN tblproduction p ON it.itemId = p.itemId 
         GROUP BY it.itemId 
-        HAVING totalQuantity < 20;
+        HAVING totalQuantity < 20
+        ORDER BY totalQuantity ASC;
       `;
 
     // Raw Materials query
@@ -917,7 +939,7 @@ app.get("/api/dashboard", async (req, res) => {
         HAVING 
           COALESCE(SUM(odi.remaining_quantity), 0) < 20
         ORDER BY 
-          total_remaining_quantity DESC;
+          total_remaining_quantity ASC;
       `;
 
     // Supplier Deliveries query
@@ -1023,7 +1045,7 @@ LIMIT 5;
 //getting the whole table from inventory
 app.get("/api/item", (req, res) => {
   const sql = `
-        SELECT it.* ,  COALESCE(SUM(p.actualQuantityProduced), 0) AS totalQuantity  FROM tblitems it LEFT JOIN tblproduction p ON it.itemId = p.itemId GROUP BY it.itemId;
+        SELECT it.* ,  COALESCE(SUM(p.actualQuantityProduced), 0) AS totalQuantity  FROM tblitems it LEFT JOIN tblproduction p ON it.itemId = p.itemId GROUP BY it.itemId ORDER BY totalQuantity ASC;
       `;
 
   db.query(sql, (err, results) => {
@@ -1071,6 +1093,12 @@ app.post("/api/addItem", (req, res) => {
   // Validate the input
   if (!itemName || !price || !category || !description) {
     return res.status(400).json({ message: "All fields are required" });
+  }
+
+  if (!materials) {
+    return res
+      .status(400)
+      .json({ message: "Materials must be a valid object." });
   }
 
   // Get a connection from the pool
@@ -1503,7 +1531,7 @@ app.get("/api/rawmats", async (req, res) => {
 
   GROUP BY 
     raw.matName, raw.category, raw.matId
-    ORDER BY raw.matId DESC;`;
+    ORDER BY total_remaining_quantity ASC;`;
     db.query(query, (error, results) => {
       if (error) {
         console.error("Error fetching raw materials: ", error);
@@ -2118,6 +2146,8 @@ app.get("/api/supDeli", async (req, res) => {
                 odi.price,
                 odi.totalCost AS itemTotal,
                 odi.quantity,
+                odi.quantity_received,
+                odi.remaining_quantity,
                 mat.matName,
                 mat.matId
               FROM tblsuppliers sp
@@ -2230,9 +2260,8 @@ app.put("/api/supplier/:supplyId", (req, res) => {
 app.delete("/api/deletesupplier/:id", (req, res) => {
   const supplierId = req.params.id;
 
-  // First, delete records from tblrawmatsinv that reference supDeliId in tblsupdeli
   const deleteRawMatsInvQuery = `
-      DELETE FROM tblrawmatsinv WHERE supDeliId IN (SELECT supDeliId FROM tblsupdeli WHERE supplyId = ?)
+      DELETE FROM tblorderfromsupplier_items WHERE orderId IN (SELECT orderId FROM tblordersfromsupplier WHERE supplyId = ?)
     `;
   db.query(deleteRawMatsInvQuery, [supplierId], (err) => {
     if (err) {
@@ -5351,18 +5380,17 @@ app.get("/api/sales/summary", (req, res) => {
 });
 /*
   SALES
-  *//*
-  */
+  */ /*
+ */
 
 // ** DASHBOARD ** //
 app.get("/api/sales/current-year", (req, res) => {
   const query = `
-    SELECT 
-      MONTH(STR_TO_DATE(SUBSTRING_INDEX(time_return, ' ', 1), '%m-%d-%Y')) AS month, 
-      SUM(total_sum_price) AS total_sales
-    FROM tblsales
-    WHERE YEAR(STR_TO_DATE(SUBSTRING_INDEX(time_return, ' ', 1), '%m-%d-%Y')) = YEAR(CURDATE())
-    GROUP BY MONTH(STR_TO_DATE(SUBSTRING_INDEX(time_return, ' ', 1), '%m-%d-%Y'))
+    SELECT MONTH(STR_TO_DATE(SUBSTRING_INDEX(time_return, ' ', 1), '%m-%d-%Y')) 
+    AS month, SUM(total_sum_price) AS total_sales 
+    FROM ( SELECT DISTINCT order_id, total_sum_price, time_return FROM tblsales ) 
+    AS distinct_sales WHERE YEAR(STR_TO_DATE(SUBSTRING_INDEX(time_return, ' ', 1), '%m-%d-%Y')) = YEAR(CURDATE()) 
+    GROUP BY MONTH(STR_TO_DATE(SUBSTRING_INDEX(time_return, ' ', 1), '%m-%d-%Y')) 
     ORDER BY MONTH(STR_TO_DATE(SUBSTRING_INDEX(time_return, ' ', 1), '%m-%d-%Y'));
   `;
 
@@ -5477,6 +5505,45 @@ app.get("/api/sales_today/", (req, res) => {
     return res.status(200).json({
       status: "success",
       daily_total_sales: dailyTotalSales,
+    });
+  });
+});
+
+app.get("/api/sales_month/", (req, res) => {
+  const sql = `SELECT 
+              SUM(total_sum_price) AS monthly_total_sales
+          FROM (
+              SELECT 
+                  order_id, 
+                  total_sum_price
+              FROM tblsales
+              WHERE DATE_FORMAT(STR_TO_DATE(time_return, '%m-%d-%Y %H:%i'), '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m')
+              GROUP BY order_id
+          ) AS distinct_orders;
+                `;
+
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error("Error fetching orders:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+
+    if (!result || result.length === 0) {
+      return res
+        .status(200)
+        .json({ status: "success", message: "No sales today." });
+    }
+
+    console.log(result);
+
+    // Assuming the result contains a column `monthly_total_sales`
+    const thisMonthTotalSales = result[0].monthly_total_sales;
+
+    return res.status(200).json({
+      status: "success",
+      thisMonth_total_sales: thisMonthTotalSales,
     });
   });
 });
@@ -5991,7 +6058,7 @@ app.get("/api/courier_ready/", (req, res) => {
       // For each vehicle_plate, fetch the orders and associated products
       const ordersWithProducts = await Promise.all(
         result.map(async (vehicle) => {
-          const orderSql = `SELECT DISTINCT order_id, customer_loc, total_sum_price
+          const orderSql = `SELECT DISTINCT order_id, customer_loc, customer_name, total_sum_price
                               FROM tblorders_customer
                               WHERE vehicle_plate = ?
                               AND status = "READY"
@@ -6026,6 +6093,7 @@ app.get("/api/courier_ready/", (req, res) => {
               return {
                 order_id: order.order_id,
                 customer_loc: order.customer_loc,
+                customer_name: order.customer_name,
                 total_sum_price: order.total_sum_price,
                 products,
               };
@@ -7492,16 +7560,16 @@ app.get("/api/reports", (req, res) => {
       `;
       break;
 
-    case "suppliers":
-      sql = `
-        SELECT s.supplyId AS ID, s.supplyName AS SUPPLIER, s.contact AS CONTACT, 
-        GROUP_CONCAT(r.matName) AS PRODUCTS
-        FROM tblsuppliers s
-        LEFT JOIN tblsupplierrawmats sr ON s.supplyId = sr.supplierId
-        LEFT JOIN tblrawmats r ON sr.rawMatId = r.matId
-        GROUP BY s.supplyId;
-      `;
-      break;
+    // case "suppliers":
+    //   sql = `
+    //     SELECT s.supplyId AS ID, s.supplyName AS SUPPLIER, s.contact AS CONTACT,
+    //     GROUP_CONCAT(r.matName) AS PRODUCTS
+    //     FROM tblsuppliers s
+    //     LEFT JOIN tblsupplierrawmats sr ON s.supplyId = sr.supplierId
+    //     LEFT JOIN tblrawmats r ON sr.rawMatId = r.matId
+    //     GROUP BY s.supplyId;
+    //   `;
+    //   break;
 
     case "documents":
       sql = `
