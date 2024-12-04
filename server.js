@@ -6785,7 +6785,6 @@ app.get("/api/cancelled_orders/", (req, res) => {
 /*
   SALES
   */
-
 /*
   CUSTOMER
   */
@@ -6814,17 +6813,16 @@ app.get("/api/api-get-customer-info/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
     const sql = `
-    SELECT c.name, c.location
-    FROM tblusers u 
-    LEFT JOIN tblcustomer c ON c.customer_id = u.id 
-    WHERE u.id = '${userId}'
-  `;
-    await db.query(sql, (err, result) => {
-      console.log(result[0]);
-      return res.status(200).json({ status: "success", res: result[0] });
-    });
+      SELECT c.name, c.location
+      FROM tblusers u
+      LEFT JOIN tblcustomer c ON c.customer_id = u.id
+      WHERE u.id = ?
+    `;
+
+    const [result] = await db.promise().query(sql, [userId]);
+    res.status(200).json({ status: "success", res: result[0] });
   } catch (error) {
-    console.error("Error fetching customer name:", error);
+    console.error("Error fetching customer name info:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -6832,11 +6830,10 @@ app.get("/api/api-get-customer-info/:userId", async (req, res) => {
 app.get("/api/api-items", async (req, res) => {
   try {
     const sql = `SELECT * FROM tblitems WHERE quantity != 0`;
-    await db.query(sql, (err, result) => {
-      return res.status(200).json({ status: "success", res: result });
-    });
+    const [rows] = await db.promise().query(sql);
+    res.status(200).json({ status: "success", res: rows });
   } catch (error) {
-    console.error("Error fetching api-items:", error);
+    console.error("Error fetching API ITEMS:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -6897,7 +6894,7 @@ app.post("/api/api-insert-to-cart", async (req, res) => {
       }
     );
   } catch (error) {
-    console.error("Error fetching customer name:", error);
+    console.error("Error fetching insert to cart:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -6906,19 +6903,20 @@ app.get("/api/mycart/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
 
-    const sql = `SELECT item_id, item_name, description, price, 
-      SUM(qty) AS qty,
-      SUM(total_price) AS total_price
+    // Use parameterized query to prevent SQL injection
+    const sql = `
+      SELECT item_id, item_name, description, price, 
+             SUM(qty) AS qty, SUM(total_price) AS total_price
       FROM tblcart 
       WHERE isOrdered = "0" 
-      AND customer_id = ${userId} 
+      AND customer_id = ? 
       GROUP BY item_name, price;`;
 
-    await db.query(sql, (err, result) => {
-      return res.status(200).json({ status: "success", res: result });
-    });
+    const [rows] = await db.promise().query(sql, [userId]);
+
+    res.status(200).json({ status: "success", res: rows });
   } catch (error) {
-    console.error("Error fetching customer name:", error);
+    console.error("Error fetching mycart:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -6961,8 +6959,6 @@ app.post("/api/checkout_cus", async (req, res) => {
     customerLoc,
   } = req.body;
 
-  console.log("payment: ", payment);
-
   // Validate required fields
   if (!userId || !cartItems || cartItems.length === 0) {
     return res.status(400).json({ message: "Invalid data provided." });
@@ -6973,8 +6969,6 @@ app.post("/api/checkout_cus", async (req, res) => {
 
   try {
     db.query(checkPaymentSql, [payment], (err, rows) => {
-      console.log("ROWS SA TBL_MOP: ", rows);
-
       if (err) {
         console.error("Error checking payment method:", err);
         return res.status(500).json({ message: "Internal server error." });
@@ -6986,8 +6980,6 @@ app.post("/api/checkout_cus", async (req, res) => {
       }
 
       const paymentInfo = rows[0]; // Assume one row matches the query
-
-      console.log("===>", typeof paymentInfo.attach_file);
 
       // If attached_file is 0, allow refNo to be null or empty
       if (paymentInfo.attach_file === 0 && (!refNo || refNo.trim() === "")) {
@@ -7011,8 +7003,6 @@ app.post("/api/checkout_cus", async (req, res) => {
         const checkRefNoSql = `SELECT * FROM tblorders_customer WHERE ref_no = ?`;
 
         db.query(checkRefNoSql, [refNo], async (err, rows) => {
-          console.log("rows: ", rows.length);
-
           if (err) {
             console.error("Error checking refNo:", err);
             return res.status(500).json({ message: "Internal server error." });
@@ -7066,7 +7056,6 @@ app.post("/api/checkout_cus", async (req, res) => {
     const defaultStatus = "Pending";
 
     const insertOrderPromises = cartItems.map((item) => {
-      console.log("item: ", item);
       const sql = `
       INSERT INTO tblorders_customer (
         order_id,
@@ -7137,18 +7126,19 @@ app.post("/api/checkout_cus", async (req, res) => {
 });
 
 //fetch orders of customer (tblorder_customer) PENDING AND COMPLETED
-app.get("/api/orders_customer/:userId", (req, res) => {
+app.get("/api/orders_customer/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
 
     const sql = `SELECT DISTINCT *
       FROM tblorders_customer
-      WHERE customer_id = ? 
+      WHERE customer_id = ${userId} 
         AND status NOT IN ('Cancelled', 'Decline')
       GROUP BY order_id
-      ORDER BY date DESC, order_id DESC;`;
+      ORDER BY date DESC, order_id DESC;
+      `;
 
-    db.query(sql, [userId], (err, result) => {
+    db.query(sql, (err, result) => {
       if (err) {
         console.error("Error fetching orders:", err);
         return res
@@ -7162,37 +7152,47 @@ app.get("/api/orders_customer/:userId", (req, res) => {
           .json({ status: "success", res: "No pending orders found." });
       }
 
-      // Process orders
       const orders = [];
-      let completed = 0;
 
-      result.forEach((order, index) => {
-        const productSql = `SELECT *
-                FROM tblorders_customer 
-                WHERE order_id = ? 
-                ORDER BY order_id DESC;`;
+      // Use async function inside a loop to handle multiple queries
+      const fetchProductsForOrder = (order) => {
+        return new Promise((resolve, reject) => {
+          const productSql = `SELECT *
+                  FROM tblorders_customer 
+                  WHERE order_id = ? 
+                  ORDER BY order_id DESC;`;
 
-        db.query(productSql, [order.order_id], (productErr, products) => {
-          if (productErr) {
-            console.error("Error fetching products:", productErr);
-            return res
-              .status(500)
-              .json({ status: "error", message: "Internal server error" });
-          }
-
-          orders[index] = { ...order, products };
-          completed++;
-
-          // Respond only when all queries are complete
-          if (completed === result.length) {
-            res.status(200).json({ status: "success", res: orders });
-          }
+          db.query(productSql, [order.order_id], (err, products) => {
+            if (err) {
+              return reject(err);
+            }
+            resolve({ ...order, products });
+          });
         });
-      });
+      };
+
+      const fetchAllOrders = async () => {
+        try {
+          const ordersWithProducts = await Promise.all(
+            result.map((order) => fetchProductsForOrder(order))
+          );
+
+          return res
+            .status(200)
+            .json({ status: "success", res: ordersWithProducts });
+        } catch (err) {
+          console.error("Error fetching products:", err);
+          return res
+            .status(500)
+            .json({ status: "error", message: "Internal server error" });
+        }
+      };
+
+      fetchAllOrders();
     });
   } catch (error) {
-    console.error("Error fetching customer orders:", error);
-    res.status(500).json({ status: "error", message: "Internal server error" });
+    console.error("Error fetching ORDERS:", error);
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -7210,7 +7210,7 @@ app.get("/api/orders_customer_cancelled/:userId", async (req, res) => {
       return res.status(200).json({ status: "success", res: result });
     });
   } catch (error) {
-    console.error("Error fetching customer name:", error);
+    console.error("Error fetching orders cancelled:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -7344,7 +7344,7 @@ app.get("/api/completed_orders/:userId", async (req, res) => {
       fetchAllOrders();
     });
   } catch (error) {
-    console.error("Error fetching customer name:", error);
+    console.error("Error fetching completed orders:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -7415,7 +7415,7 @@ app.get("/api/decline_orders/:userId", async (req, res) => {
       fetchAllOrders();
     });
   } catch (error) {
-    console.error("Error fetching customer name:", error);
+    console.error("Error fetching decline orders:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -7486,7 +7486,7 @@ app.get("/api/cancelled_orders/:userId", async (req, res) => {
       fetchAllOrders();
     });
   } catch (error) {
-    console.error("Error fetching customer name:", error);
+    console.error("Error fetching cancelled orders:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -7504,7 +7504,7 @@ app.post("/api/cancelling_order/", async (req, res) => {
       return res.status(200).json({ status: "success", res: result });
     });
   } catch (error) {
-    console.error("Error fetching customer name:", error);
+    console.error("Error fetching cancelling order:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
