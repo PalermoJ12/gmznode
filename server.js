@@ -6836,7 +6836,7 @@ app.get("/api/api-items", async (req, res) => {
       return res.status(200).json({ status: "success", res: result });
     });
   } catch (error) {
-    console.error("Error fetching customer name:", error);
+    console.error("Error fetching api-items:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
