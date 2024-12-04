@@ -6787,8 +6787,7 @@ app.get("/api/cancelled_orders/", (req, res) => {
 /*
   SALES
   */
-
-  /*
+/*
   CUSTOMER
   */
 
@@ -6816,16 +6815,16 @@ app.get("/api/api-get-customer-info/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
     const sql = `
-      SELECT c.name, c.location
-      FROM tblusers u
-      LEFT JOIN tblcustomer c ON c.customer_id = u.id
-      WHERE u.id = ?
-    `;
-
-    const [result] = await db.promise().query(sql, [userId]);
-    res.status(200).json({ status: "success", res: result[0] });
+    SELECT c.name, c.location
+    FROM tblusers u 
+    LEFT JOIN tblcustomer c ON c.customer_id = u.id 
+    WHERE u.id = '${userId}'
+  `;
+    await db.query(sql, (err, result) => {
+      return res.status(200).json({ status: "success", res: result[0] });
+    });
   } catch (error) {
-    console.error("Error fetching customer name info:", error);
+    console.error("Error fetching customer name:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -6833,11 +6832,11 @@ app.get("/api/api-get-customer-info/:userId", async (req, res) => {
 app.get("/api/api-items", async (req, res) => {
   try {
     const sql = `SELECT * FROM tblitems WHERE quantity != 0`;
-    const [rows] = await db.promise().query(sql);
-
-    res.status(200).json({ status: "success", res: rows });
+    await db.query(sql, (err, result) => {
+      return res.status(200).json({ status: "success", res: result });
+    });
   } catch (error) {
-    console.error("Error fetching API ITEMS:", error);
+    console.error("Error fetching customer name:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -6856,15 +6855,24 @@ app.post("/api/api-insert-to-cart", async (req, res) => {
     customerLoc,
   } = req.body;
 
-  const sql = `INSERT INTO tblcart 
-    (item_id, item_name, price, description, qty, total_price, isOrdered, customer_id, customer_name, customer_loc) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-
+  // if (
+  //   !itemId ||
+  //   !itemName ||
+  //   !price ||
+  //   !description ||
+  //   !quantity ||
+  //   !totalPrice
+  // ) {
+  //   return res.status(400).json({ message: "All fields are required." });
+  // }
   try {
-    // Use promise-based query to handle database operations
-    const [result] = await db
-      .promise()
-      .query(sql, [
+    const sql = `INSERT INTO tblcart 
+      (item_id, item_name, price, description, qty, total_price, isOrdered, customer_id, customer_name, customer_loc) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+    await db.query(
+      sql,
+      [
         selectedProduct,
         itemName,
         price,
@@ -6875,18 +6883,22 @@ app.post("/api/api-insert-to-cart", async (req, res) => {
         customerId,
         customerName,
         customerLoc,
-      ]);
+      ],
+      (err, result) => {
+        if (err) {
+          return res.status(500).json({ message: err });
+        }
 
-    // Send a single response when successful
-    return res.status(200).json({
-      message: "Added to cart successfully.",
-      status: "success",
-      res: result,
-    });
+        return res.status(200).json({
+          message: "Added to cart successfully.",
+          status: "success",
+          res: result,
+        });
+      }
+    );
   } catch (error) {
-    // Handle errors and send a single response
-    console.error("Error inserting to cart:", error);
-    return res.status(500).json({ message: "Internal server error" });
+    console.error("Error fetching customer name:", error);
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -6894,20 +6906,19 @@ app.get("/api/mycart/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
 
-    // Use parameterized query to prevent SQL injection
-    const sql = `
-      SELECT item_id, item_name, description, price, 
-             SUM(qty) AS qty, SUM(total_price) AS total_price
+    const sql = `SELECT item_id, item_name, description, price, 
+      SUM(qty) AS qty,
+      SUM(total_price) AS total_price
       FROM tblcart 
       WHERE isOrdered = "0" 
-      AND customer_id = ? 
+      AND customer_id = ${userId} 
       GROUP BY item_name, price;`;
 
-    const [rows] = await db.promise().query(sql, [userId]);
-
-    res.status(200).json({ status: "success", res: rows });
+    await db.query(sql, (err, result) => {
+      return res.status(200).json({ status: "success", res: result });
+    });
   } catch (error) {
-    console.error("Error fetching mycart:", error);
+    console.error("Error fetching customer name:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -7182,7 +7193,7 @@ app.get("/api/orders_customer/:userId", async (req, res) => {
       fetchAllOrders();
     });
   } catch (error) {
-    console.error("Error fetching ORDERS:", error);
+    console.error("Error fetching customer name:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -7201,7 +7212,7 @@ app.get("/api/orders_customer_cancelled/:userId", async (req, res) => {
       return res.status(200).json({ status: "success", res: result });
     });
   } catch (error) {
-    console.error("Error fetching orders cancelled:", error);
+    console.error("Error fetching customer name:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -7335,7 +7346,7 @@ app.get("/api/completed_orders/:userId", async (req, res) => {
       fetchAllOrders();
     });
   } catch (error) {
-    console.error("Error fetching completed orders:", error);
+    console.error("Error fetching customer name:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -7406,7 +7417,7 @@ app.get("/api/decline_orders/:userId", async (req, res) => {
       fetchAllOrders();
     });
   } catch (error) {
-    console.error("Error fetching decline orders:", error);
+    console.error("Error fetching customer name:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -7477,7 +7488,7 @@ app.get("/api/cancelled_orders/:userId", async (req, res) => {
       fetchAllOrders();
     });
   } catch (error) {
-    console.error("Error fetching cancelled orders:", error);
+    console.error("Error fetching customer name:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -7495,7 +7506,7 @@ app.post("/api/cancelling_order/", async (req, res) => {
       return res.status(200).json({ status: "success", res: result });
     });
   } catch (error) {
-    console.error("Error fetching cancelling order:", error);
+    console.error("Error fetching customer name:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
