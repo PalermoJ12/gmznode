@@ -7137,52 +7137,61 @@ app.post("/api/checkout_cus", async (req, res) => {
 });
 
 //fetch orders of customer (tblorder_customer) PENDING AND COMPLETED
-app.get("/api/orders_customer/:userId", async (req, res) => {
+app.get("/api/orders_customer/:userId", (req, res) => {
   try {
     const userId = req.params.userId;
 
-    // SQL query for fetching distinct orders
-    const sql = `
-      SELECT DISTINCT *
+    const sql = `SELECT DISTINCT *
       FROM tblorders_customer
       WHERE customer_id = ? 
         AND status NOT IN ('Cancelled', 'Decline')
       GROUP BY order_id
-      ORDER BY date DESC, order_id DESC;
-    `;
+      ORDER BY date DESC, order_id DESC;`;
 
-    // Fetch orders using a promise-based query
-    const [orders] = await db.promise().query(sql, [userId]);
+    db.query(sql, [userId], (err, result) => {
+      if (err) {
+        console.error("Error fetching orders:", err);
+        return res
+          .status(500)
+          .json({ status: "error", message: "Internal server error" });
+      }
 
-    if (!orders || orders.length === 0) {
-      return res
-        .status(200)
-        .json({ status: "success", res: "No pending orders found." });
-    }
+      if (!result || result.length === 0) {
+        return res
+          .status(200)
+          .json({ status: "success", res: "No pending orders found." });
+      }
 
-    // Fetch products for each order
-    const fetchProductsForOrder = async (orderId) => {
-      const productSql = `
-        SELECT *
-        FROM tblorders_customer 
-        WHERE order_id = ? 
-        ORDER BY order_id DESC;
-      `;
-      const [products] = await db.promise().query(productSql, [orderId]);
-      return products;
-    };
+      // Process orders
+      const orders = [];
+      let completed = 0;
 
-    const ordersWithProducts = await Promise.all(
-      orders.map(async (order) => {
-        const products = await fetchProductsForOrder(order.order_id);
-        return { ...order, products };
-      })
-    );
+      result.forEach((order, index) => {
+        const productSql = `SELECT *
+                FROM tblorders_customer 
+                WHERE order_id = ? 
+                ORDER BY order_id DESC;`;
 
-    // Send final response
-    res.status(200).json({ status: "success", res: ordersWithProducts });
+        db.query(productSql, [order.order_id], (productErr, products) => {
+          if (productErr) {
+            console.error("Error fetching products:", productErr);
+            return res
+              .status(500)
+              .json({ status: "error", message: "Internal server error" });
+          }
+
+          orders[index] = { ...order, products };
+          completed++;
+
+          // Respond only when all queries are complete
+          if (completed === result.length) {
+            res.status(200).json({ status: "success", res: orders });
+          }
+        });
+      });
+    });
   } catch (error) {
-    console.error("Error fetching orders:", error);
+    console.error("Error fetching customer orders:", error);
     res.status(500).json({ status: "error", message: "Internal server error" });
   }
 });
