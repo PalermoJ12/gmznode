@@ -6831,6 +6831,7 @@ app.get("/api/api-items", async (req, res) => {
   try {
     const sql = `SELECT * FROM tblitems WHERE quantity != 0`;
     const [rows] = await db.promise().query(sql);
+
     res.status(200).json({ status: "success", res: rows });
   } catch (error) {
     console.error("Error fetching API ITEMS:", error);
@@ -6852,24 +6853,15 @@ app.post("/api/api-insert-to-cart", async (req, res) => {
     customerLoc,
   } = req.body;
 
-  // if (
-  //   !itemId ||
-  //   !itemName ||
-  //   !price ||
-  //   !description ||
-  //   !quantity ||
-  //   !totalPrice
-  // ) {
-  //   return res.status(400).json({ message: "All fields are required." });
-  // }
-  try {
-    const sql = `INSERT INTO tblcart 
-      (item_id, item_name, price, description, qty, total_price, isOrdered, customer_id, customer_name, customer_loc) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  const sql = `INSERT INTO tblcart 
+    (item_id, item_name, price, description, qty, total_price, isOrdered, customer_id, customer_name, customer_loc) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-    await db.query(
-      sql,
-      [
+  try {
+    // Use promise-based query to handle database operations
+    const [result] = await db
+      .promise()
+      .query(sql, [
         selectedProduct,
         itemName,
         price,
@@ -6880,22 +6872,18 @@ app.post("/api/api-insert-to-cart", async (req, res) => {
         customerId,
         customerName,
         customerLoc,
-      ],
-      (err, result) => {
-        if (err) {
-          return res.status(500).json({ message: err });
-        }
+      ]);
 
-        return res.status(200).json({
-          message: "Added to cart successfully.",
-          status: "success",
-          res: result,
-        });
-      }
-    );
+    // Send a single response when successful
+    return res.status(200).json({
+      message: "Added to cart successfully.",
+      status: "success",
+      res: result,
+    });
   } catch (error) {
-    console.error("Error fetching insert to cart:", error);
-    res.status(500).json({ message: "Internal server error" });
+    // Handle errors and send a single response
+    console.error("Error inserting to cart:", error);
+    return res.status(500).json({ message: "Internal server error" });
   }
 });
 
