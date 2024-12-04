@@ -7550,7 +7550,7 @@ app.get("/api/reports", (req, res) => {
     LEFT JOIN 
         tblproduction p ON it.itemId = p.itemId
     GROUP BY 
-        it.itemId;
+        it.itemId
       ORDER BY  p.productionDate DESC;
       `;
       break;
