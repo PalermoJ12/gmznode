@@ -1122,7 +1122,7 @@ app.post("/api/addItem", (req, res) => {
 
       // Insert into tblitems
       const insertItemQuery =
-        "INSERT INTO tblitems (itemName, price, category, description) VALUES (?, ?, ?, ?)";
+        "INSERT INTO tblitems (itemName, price, category, description , quantity) VALUES (?, ?, ?, ?, 0)";
       connection.query(
         insertItemQuery,
         [itemName, price, category, description],
