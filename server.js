@@ -64,7 +64,6 @@ const db = mysql.createPool({
 });
 
 
-
 db.getConnection((err, connection) => {
   if (err) {
     console.error("Error connecting to the database:", err);
@@ -3468,7 +3467,7 @@ app.get("/api/production", (req, res) => {
     SELECT pd.*, it.itemName 
     FROM tblproduction pd 
     LEFT JOIN tblitems it ON pd.itemId = it.itemId 
-    ORDER BY pd.production_status ASC;
+    ORDER BY pd.productionId DESC;
   `;
 
   db.query(query, (err, results) => {
@@ -4062,13 +4061,13 @@ app.put("/api/updateProduction/:productionId", (req, res) => {
 
           const materialLogDescription = `Reverted ${material.quantityUsed} units of material: ${material.matName}`;
           const insertMaterialLogSql = `
-              INSERT INTO tblproductionmateriallogs (dateLogged, description) 
-              VALUES (?, ?);`;
+              INSERT INTO tblproductionmateriallogs (productionId,dateLogged, description) 
+              VALUES (?,?, ?);`;
 
           await new Promise((resolve, reject) => {
             connection.query(
               insertMaterialLogSql,
-              [productionDate, materialLogDescription],
+              [productionId, productionDate, materialLogDescription],
               (err) => {
                 if (err) reject(err);
                 resolve();
@@ -4243,13 +4242,13 @@ app.put("/api/updateProduction/:productionId", (req, res) => {
           .join(", ");
 
         const insertMaterialLogSql = `
-            INSERT INTO tblproductionmateriallogs (dateLogged, description)
-            VALUES (?, ?);`;
+            INSERT INTO tblproductionmateriallogs (productionId, dateLogged, description)
+            VALUES (?,?, ?);`;
 
         await new Promise((resolve, reject) => {
           connection.query(
             insertMaterialLogSql,
-            [productionDate, materialLogDescription],
+            [productionId, productionDate, materialLogDescription],
             (err) => {
               if (err) reject(err);
               resolve();
@@ -4406,7 +4405,20 @@ app.delete("/api/production/:id", async (req, res) => {
           });
         });
 
-        // Commit the transaction
+        const logDeletionSql = `
+        INSERT INTO tblproductionmateriallogs (productionId,dateLogged, description) 
+        VALUES (?,?, ?);`;
+        const logDescription = `Deleted production ID ${id} and reverted materials.`;
+        await new Promise((resolve, reject) => {
+          connection.query(
+            logDeletionSql,
+            [id, new Date(), logDescription],
+            (err) => {
+              if (err) reject(err);
+              resolve();
+            }
+          );
+        });
         connection.commit((commitErr) => {
           if (commitErr) {
             console.error("Transaction commit error:", commitErr);
@@ -7539,6 +7551,7 @@ app.get("/api/reports", (req, res) => {
         tblproduction p ON it.itemId = p.itemId
     GROUP BY 
         it.itemId;
+      ORDER BY DATE DESC;
       `;
       break;
 
@@ -7553,7 +7566,7 @@ app.get("/api/reports", (req, res) => {
         FROM tblrawmats raw
         LEFT JOIN tblorderfromsupplier_items odi ON raw.matId = odi.matId
         GROUP BY raw.matName, raw.category, raw.matId
-        ORDER BY raw.matId ASC;
+        ORDER BY DATE DESC;
       `;
       break;
 
@@ -7585,7 +7598,7 @@ app.get("/api/reports", (req, res) => {
     FROM 
       tbldocument d
     ORDER BY 
-      d.expirationDate ASC;
+      d.expirationDate DESC;
       `;
       break;
 
@@ -7595,7 +7608,7 @@ app.get("/api/reports", (req, res) => {
    sl.total_price AS TOTAL,
    sl.mop AS MOP ,  sl.date AS DATE 
    FROM tblsales sl 
-   ORDER BY sl.order_id;
+   ORDER BY sl.order_id DESC;
       `;
       break;
 
