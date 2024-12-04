@@ -7141,69 +7141,49 @@ app.get("/api/orders_customer/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
 
-    const sql = `SELECT DISTINCT *
+    // SQL query for fetching distinct orders
+    const sql = `
+      SELECT DISTINCT *
       FROM tblorders_customer
-      WHERE customer_id = ${userId} 
+      WHERE customer_id = ? 
         AND status NOT IN ('Cancelled', 'Decline')
       GROUP BY order_id
       ORDER BY date DESC, order_id DESC;
+    `;
+
+    // Fetch orders using a promise-based query
+    const [orders] = await db.promise().query(sql, [userId]);
+
+    if (!orders || orders.length === 0) {
+      return res
+        .status(200)
+        .json({ status: "success", res: "No pending orders found." });
+    }
+
+    // Fetch products for each order
+    const fetchProductsForOrder = async (orderId) => {
+      const productSql = `
+        SELECT *
+        FROM tblorders_customer 
+        WHERE order_id = ? 
+        ORDER BY order_id DESC;
       `;
+      const [products] = await db.promise().query(productSql, [orderId]);
+      return products;
+    };
 
-    db.query(sql, (err, result) => {
-      if (err) {
-        console.error("Error fetching orders:", err);
-        return res
-          .status(500)
-          .json({ status: "error", message: "Internal server error" });
-      }
+    const ordersWithProducts = await Promise.all(
+      orders.map(async (order) => {
+        const products = await fetchProductsForOrder(order.order_id);
+        return { ...order, products };
+      })
+    );
 
-      if (!result || result.length === 0) {
-        return res
-          .status(200)
-          .json({ status: "success", res: "No pending orders found." });
-      }
-
-      const orders = [];
-
-      // Use async function inside a loop to handle multiple queries
-      const fetchProductsForOrder = (order) => {
-        return new Promise((resolve, reject) => {
-          const productSql = `SELECT *
-                  FROM tblorders_customer 
-                  WHERE order_id = ? 
-                  ORDER BY order_id DESC;`;
-
-          db.query(productSql, [order.order_id], (err, products) => {
-            if (err) {
-              return reject(err);
-            }
-            resolve({ ...order, products });
-          });
-        });
-      };
-
-      const fetchAllOrders = async () => {
-        try {
-          const ordersWithProducts = await Promise.all(
-            result.map((order) => fetchProductsForOrder(order))
-          );
-
-          return res
-            .status(200)
-            .json({ status: "success", res: ordersWithProducts });
-        } catch (err) {
-          console.error("Error fetching products:", err);
-          return res
-            .status(500)
-            .json({ status: "error", message: "Internal server error" });
-        }
-      };
-
-      fetchAllOrders();
-    });
+    // Send final response
+    res.status(200).json({ status: "success", res: ordersWithProducts });
   } catch (error) {
-    console.error("Error fetching customer name:", error);
-    res.status(500).json({ message: "Internal server error" });
+    console.error("Error fetching orders:", error);
+    res.status(500).json({ status: "error", message: "Internal server error" });
   }
 });
 
