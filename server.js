@@ -63,6 +63,8 @@ const db = mysql.createPool({
   connectionLimit: 10          // Connection limit (adjust if necessary)
 });
 
+
+
 db.getConnection((err, connection) => {
   if (err) {
     console.error("Error connecting to the database:", err);
@@ -784,7 +786,7 @@ app.get("/api/documents/notifications", (req, res) => {
               INSERT INTO tblnotifications (description, status)
               VALUES (?, ?)
             `;
-        
+
           db.query(insertQuery, [description, 0], (insertErr) => {
             if (insertErr) {
               console.error("Error inserting notification:", insertErr);
@@ -1122,7 +1124,7 @@ app.post("/api/addItem", (req, res) => {
 
       // Insert into tblitems
       const insertItemQuery =
-        "INSERT INTO tblitems (itemName, price, category, description , quantity) VALUES (?, ?, ?, ?, 0)";
+        "INSERT INTO tblitems (itemName, price, category, description , quantity) VALUES (?, ?, ?, ? , 0)";
       connection.query(
         insertItemQuery,
         [itemName, price, category, description],
@@ -2066,7 +2068,7 @@ WHERE orderId = ? AND quantity_received IS NULL;
           }
 
           const allItemsReceived = checkResults[0].pendingItems === 0;
-  
+
           if (allItemsReceived) {
             const updateOrderQuery = `
                 UPDATE tblordersfromsupplier 
@@ -3466,7 +3468,7 @@ app.get("/api/production", (req, res) => {
     SELECT pd.*, it.itemName 
     FROM tblproduction pd 
     LEFT JOIN tblitems it ON pd.itemId = it.itemId 
-    ORDER BY pd.productionDate DESC;
+    ORDER BY pd.production_status ASC;
   `;
 
   db.query(query, (err, results) => {
@@ -3525,32 +3527,30 @@ app.post("/api/produce", (req, res) => {
     }
 
     // Start the transaction
-    connection.beginTransaction((transactionErr) => {
+    connection.beginTransaction(async (transactionErr) => {
       if (transactionErr) {
         connection.release();
         console.error("Transaction start error:", transactionErr);
         return res.status(500).send("Error starting transaction.");
       }
 
-      // Step 1: Fetch required materials
-      const getMaterialsSql = `
-          SELECT r.matId, r.matName, COALESCE(SUM(odi.remaining_quantity), 0) AS availableQuantity, 
-                odi.orderItemId, odi.remaining_quantity
-          FROM tblitem_ingredients i
-          LEFT JOIN tblorderfromsupplier_items odi ON i.matId = odi.matId
-          LEFT JOIN tblrawmats r ON i.matId = r.matId
-          WHERE i.itemId = ?
-          GROUP BY i.matId;`;
+      try {
+        // Step 1: Fetch required materials
+        const getMaterialsSql = `
+            SELECT r.matId, r.matName, COALESCE(SUM(odi.remaining_quantity), 0) AS availableQuantity, 
+                  odi.orderItemId, odi.remaining_quantity
+            FROM tblitem_ingredients i
+            LEFT JOIN tblorderfromsupplier_items odi ON i.matId = odi.matId
+            LEFT JOIN tblrawmats r ON i.matId = r.matId
+            WHERE i.itemId = ?
+            GROUP BY i.matId;`;
 
-      connection.query(getMaterialsSql, [itemId], (err, materials) => {
-        if (err) {
-          connection.rollback(() => {
-            connection.release();
-            console.error("Error fetching materials:", err);
-            return res.status(500).send("Error fetching materials.");
+        const materials = await new Promise((resolve, reject) => {
+          connection.query(getMaterialsSql, [itemId], (err, results) => {
+            if (err) reject(err);
+            resolve(results);
           });
-          return;
-        }
+        });
 
         // Check material availability
         const insufficientMaterials = [];
@@ -3583,17 +3583,10 @@ app.post("/api/produce", (req, res) => {
           });
         }
 
-        const materialBatchMappings = [];
+        const materialBatchMappings = []; // To track materials used with their orderItemId
 
         // Step 2: Deduct materials and update order items
-        const processMaterials = (index) => {
-          if (index >= materialUpdates.length) {
-            // Proceed to Step 3 after processing all materials
-            insertProductionRecord();
-            return;
-          }
-
-          const material = materialUpdates[index];
+        for (const material of materialUpdates) {
           let remainingToDeduct = material.usedQuantity;
 
           const orderItemsSql = `
@@ -3602,143 +3595,163 @@ app.post("/api/produce", (req, res) => {
               WHERE matId = ? AND remaining_quantity > 0
               ORDER BY orderItemId ASC;`;
 
-          connection.query(orderItemsSql, [material.matId], (err, orderItems) => {
-            if (err) {
-              connection.rollback(() => {
-                connection.release();
-                console.error("Error fetching order items:", err);
-                return res.status(500).send("Error fetching order items.");
-              });
-              return;
-            }
-
-            const deductOrderItems = (itemIndex) => {
-              if (itemIndex >= orderItems.length || remainingToDeduct <= 0) {
-                // Update raw material and proceed to next material
-                const updateRawMaterialSql = `
-                    UPDATE tblrawmats
-                    SET quantity = quantity - ?
-                    WHERE matId = ?;`;
-
-                connection.query(updateRawMaterialSql, [material.usedQuantity, material.matId], (err) => {
-                  if (err) {
-                    connection.rollback(() => {
-                      connection.release();
-                      console.error("Error updating raw materials:", err);
-                      return res.status(500).send("Error updating raw materials.");
-                    });
-                    return;
-                  }
-
-                  processMaterials(index + 1);
-                });
-                return;
+          const orderItems = await new Promise((resolve, reject) => {
+            connection.query(
+              orderItemsSql,
+              [material.matId],
+              (err, results) => {
+                if (err) reject(err);
+                resolve(results);
               }
-
-              const orderItem = orderItems[itemIndex];
-              const quantityToDeduct = Math.min(remainingToDeduct, orderItem.remaining_quantity);
-
-              const updateOrderItemSql = `
-                  UPDATE tblorderfromsupplier_items
-                  SET remaining_quantity = remaining_quantity - ?
-                  WHERE orderItemId = ?;`;
-
-              connection.query(updateOrderItemSql, [quantityToDeduct, orderItem.orderItemId], (err) => {
-                if (err) {
-                  connection.rollback(() => {
-                    connection.release();
-                    console.error("Error updating order items:", err);
-                    return res.status(500).send("Error updating order items.");
-                  });
-                  return;
-                }
-
-                materialBatchMappings.push({
-                  matId: material.matId,
-                  matName: material.matName,
-                  orderItemId: orderItem.orderItemId,
-                  quantityUsed: quantityToDeduct,
-                });
-
-                remainingToDeduct -= quantityToDeduct;
-                deductOrderItems(itemIndex + 1);
-              });
-            };
-
-            deductOrderItems(0);
+            );
           });
-        };
 
-        const insertProductionRecord = () => {
-          const insertProductionSql = `
-              INSERT INTO tblproduction (itemId, quantityProduced, productionDate, staffName, production_status)
-              VALUES (?, ?, ?, ?, ?);`;
+          for (const orderItem of orderItems) {
+            if (remainingToDeduct <= 0) break;
 
-          const productionStatus = 0;
+            const quantityToDeduct = Math.min(
+              remainingToDeduct,
+              orderItem.remaining_quantity
+            );
 
-          connection.query(insertProductionSql, [itemId, quantityToProduce, productionDate, staffName, productionStatus], (err, result) => {
-            if (err) {
-              connection.rollback(() => {
-                connection.release();
-                console.error("Error inserting production record:", err);
-                return res.status(500).send("Error inserting production record.");
-              });
-              return;
-            }
+            const updateOrderItemSql = `
+                UPDATE tblorderfromsupplier_items
+                SET remaining_quantity = remaining_quantity - ?
+                WHERE orderItemId = ?;`;
 
-            const productionId = result.insertId;
+            await new Promise((resolve, reject) => {
+              connection.query(
+                updateOrderItemSql,
+                [quantityToDeduct, orderItem.orderItemId],
+                (err) => {
+                  if (err) reject(err);
+                  resolve();
+                }
+              );
+            });
 
-            const logMaterials = (logIndex) => {
-              if (logIndex >= materialBatchMappings.length) {
-                connection.commit((commitErr) => {
-                  if (commitErr) {
-                    connection.rollback(() => {
-                      connection.release();
-                      console.error("Transaction commit error:", commitErr);
-                      return res.status(500).send("Error committing transaction.");
-                    });
-                    return;
-                  }
+            // Track the used material in materialBatchMappings
+            materialBatchMappings.push({
+              matId: material.matId,
+              matName: material.matName,
+              orderItemId: orderItem.orderItemId,
+              quantityUsed: quantityToDeduct,
+            });
 
-                  connection.release();
-                  res.status(200).send({
-                    message: "Production recorded successfully.",
-                    productionId,
-                    materialBatchMappings,
-                  });
-                });
-                return;
+            remainingToDeduct -= quantityToDeduct;
+          }
+
+          const updateRawMaterialSql = `
+              UPDATE tblrawmats
+              SET quantity = quantity - ?
+              WHERE matId = ?;`;
+
+          await new Promise((resolve, reject) => {
+            connection.query(
+              updateRawMaterialSql,
+              [material.usedQuantity, material.matId],
+              (err) => {
+                if (err) reject(err);
+                resolve();
               }
-
-              const batch = materialBatchMappings[logIndex];
-              const insertProductionMaterialUsedSql = `
-                  INSERT INTO tblproductionmaterialused (productionId, orderItemId, quantityUsed)
-                  VALUES (?, ?, ?);`;
-
-              connection.query(insertProductionMaterialUsedSql, [productionId, batch.orderItemId, batch.quantityUsed], (err) => {
-                if (err) {
-                  connection.rollback(() => {
-                    connection.release();
-                    console.error("Error logging materials:", err);
-                    return res.status(500).send("Error logging materials.");
-                  });
-                  return;
-                }
-
-                logMaterials(logIndex + 1);
-              });
-            };
-
-            logMaterials(0);
+            );
           });
-        };
+        }
 
-        processMaterials(0);
-      });
+        // Step 3: Insert the production record
+        const insertProductionSql = `
+            INSERT INTO tblproduction (itemId, quantityProduced, productionDate, staffName, production_status)
+            VALUES (?, ?, ?, ?, ?);`;
+
+        const productionStatus = 0; // Assuming 1 means "produced"
+        const insertProductionResult = await new Promise((resolve, reject) => {
+          connection.query(
+            insertProductionSql,
+            [
+              itemId,
+              quantityToProduce,
+              productionDate,
+              staffName,
+              productionStatus,
+            ],
+            (err, result) => {
+              if (err) reject(err);
+              resolve(result);
+            }
+          );
+        });
+
+        const productionId = insertProductionResult.insertId;
+
+        // Step 4: Insert records into tblproductionmaterialused for each material used
+        for (const batch of materialBatchMappings) {
+          const insertProductionMaterialUsedSql = `
+              INSERT INTO tblproductionmaterialused (productionId, orderItemId, quantityUsed)
+              VALUES (?, ?, ?);`;
+
+          await new Promise((resolve, reject) => {
+            connection.query(
+              insertProductionMaterialUsedSql,
+              [productionId, batch.orderItemId, batch.quantityUsed],
+              (err) => {
+                if (err) reject(err);
+                resolve();
+              }
+            );
+          });
+        }
+
+        // Step 5: Log materials used in `tblproductionmateriallogs`
+        const materialLogDescription = materialBatchMappings
+          .map(
+            (batch) =>
+              `Used ${batch.quantityUsed} units of ${batch.matName} (Batch: ${batch.orderItemId})`
+          )
+          .join(", ");
+
+        const insertMaterialLogSql = `
+            INSERT INTO tblproductionmateriallogs (dateLogged, description , productionId)
+            VALUES (?, ? , ?);`;
+
+        await new Promise((resolve, reject) => {
+          connection.query(
+            insertMaterialLogSql,
+            [productionDate, materialLogDescription, productionId],
+            (err) => {
+              if (err) reject(err);
+              resolve();
+            }
+          );
+        });
+
+        // Step 6: Commit the transaction
+        connection.commit((commitErr) => {
+          if (commitErr) {
+            connection.rollback(() => {
+              connection.release();
+              console.error("Transaction commit error:", commitErr);
+              return res.status(500).send("Error committing transaction.");
+            });
+          }
+
+          // Successfully committed the transaction
+          connection.release(); // Release the connection back to the pool
+          res.status(200).send({
+            message: "Production recorded successfully.",
+            productionId,
+            materialBatchMappings,
+          });
+        });
+      } catch (err) {
+        console.error("Error during production process:", err);
+        connection.rollback(() => {
+          connection.release();
+          res.status(500).send("Error during production process.");
+        });
+      }
     });
   });
 });
-
 
 // POST: Add a new production record
 // app.post("/api/produce", (req, res) => {
@@ -6774,7 +6787,8 @@ app.get("/api/cancelled_orders/", (req, res) => {
 /*
   SALES
   */
-/*
+
+  /*
   CUSTOMER
   */
 
