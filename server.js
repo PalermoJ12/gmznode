@@ -784,13 +784,8 @@ app.get("/api/documents/notifications", (req, res) => {
               INSERT INTO tblnotifications (description, status)
               VALUES (?, ?)
             `;
-          const status =
-            notif.status === 1
-              ? "Renew Now"
-              : notif.status === 0
-              ? "Expired"
-              : "More than 3 months left";
-          db.query(insertQuery, [description, status], (insertErr) => {
+        
+          db.query(insertQuery, [description, 0], (insertErr) => {
             if (insertErr) {
               console.error("Error inserting notification:", insertErr);
             }
