@@ -3466,7 +3466,7 @@ app.get("/api/production", (req, res) => {
     SELECT pd.*, it.itemName 
     FROM tblproduction pd 
     LEFT JOIN tblitems it ON pd.itemId = it.itemId 
-    ORDER BY pd.production_status ASC;
+    ORDER BY pd.productionDate DESC;
   `;
 
   db.query(query, (err, results) => {
