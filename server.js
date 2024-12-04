@@ -256,7 +256,8 @@ app.get("/api/accounts", async (req, res) => {
 // POST add new account with optional customer info if access = 4
 // POST add new account with optional customer info if access = 4
 app.post("/api/addaccount", async (req, res) => {
-  const { username, password, access, name, location , email, contact_no } = req.body;
+  const { username, password, access, name, location, email, contact_no } =
+    req.body;
 
   const sql = `INSERT INTO tblusers (username, password, access) VALUES (?, ?, ?)`;
   try {
@@ -265,7 +266,13 @@ app.post("/api/addaccount", async (req, res) => {
     if (access == 4) {
       // If the role is Customer, add customer info
       const customerSql = `INSERT INTO tblcustomer (customer_id, name, location , contact_no, email) VALUES (?, ?, ?,?, ?)`;
-      await queryAsync(customerSql, [result.insertId, name, location, contact_no , email]);
+      await queryAsync(customerSql, [
+        result.insertId,
+        name,
+        location,
+        contact_no,
+        email,
+      ]);
     }
 
     res.status(201).json({ message: "Account added successfully." });
@@ -762,7 +769,7 @@ app.get("/api/documents/notifications", (req, res) => {
       const description = generateNotificationDescription(notif); // Create a descriptive notification message
 
       // Check if the notification already exists
-      const checkQuery = `SELECT * FROM tblnotifications WHERE description = ?`;
+      const checkQuery = `SELECT * FROM tblnotifications WHERE description = ? AND status = 0`;
       db.query(checkQuery, [description], (checkErr, checkResults) => {
         if (checkErr) {
           console.error(
@@ -2048,10 +2055,13 @@ app.put("/api/updateItemAndOrderStatus", async (req, res) => {
 
         // 3. Check if all items in the order are received
         const checkOrderQuery = `
-            SELECT COUNT(*) AS pendingItems 
-            FROM tblorderfromsupplier_items 
-            WHERE orderId = ? AND status != 1
-          `;
+SELECT COUNT(*) AS pendingItems 
+FROM tblorderfromsupplier_items 
+WHERE orderId = ? AND quantity_received IS NULL;
+
+
+      `;
+
         db.query(checkOrderQuery, [orderId], (error, checkResults) => {
           if (error) {
             console.error("Error checking order status:", error);
@@ -2061,7 +2071,7 @@ app.put("/api/updateItemAndOrderStatus", async (req, res) => {
           }
 
           const allItemsReceived = checkResults[0].pendingItems === 0;
-
+  
           if (allItemsReceived) {
             const updateOrderQuery = `
                 UPDATE tblordersfromsupplier 
@@ -2122,7 +2132,8 @@ app.get("/api/supDeli", async (req, res) => {
         LEFT JOIN tblordersfromsupplier od ON sp.supplyId = od.supplyId
         LEFT JOIN tblorderfromsupplier_items odi ON od.orderId = odi.orderId
         WHERE odi.quantity IS NOT NULL
-        GROUP BY od.orderId, sp.supplyName, od.status, od.totalCost, sp.supplyId;  -- Ensure to group by orderId
+        GROUP BY od.orderId, sp.supplyName, od.status, od.totalCost, sp.supplyId
+        ORDER BY od.orderId DESC; 
       `;
 
     db.query(query, (error, results) => {
