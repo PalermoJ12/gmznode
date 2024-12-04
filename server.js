@@ -7551,7 +7551,7 @@ app.get("/api/reports", (req, res) => {
         tblproduction p ON it.itemId = p.itemId
     GROUP BY 
         it.itemId;
-      ORDER BY DATE DESC;
+      ORDER BY  p.productionDate DESC;
       `;
       break;
 
