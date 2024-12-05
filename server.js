@@ -738,12 +738,75 @@ app.put("/api/documents/:id/archive", async (req, res) => {
 // });
 
 // Endpoint to fetch customer orders
+// app.get("/api/documents/notifications", (req, res) => {
+//   const currentDate = moment().format("YYYY-MM-DD");
+//   const oneYearFromNow = moment().add(1, "year").format("YYYY-MM-DD");
+//   const threeMonthsFromNow = moment().add(3, "months").format("YYYY-MM-DD");
+
+//   // Modify the query as required
+//   const query = `
+//       SELECT d.*, c.type AS categoryType
+//       FROM tbldocument d
+//       JOIN tblcategories c ON d.category = c.categoryName
+//       WHERE
+//         -- Notify legal documents within 1 year of expiration
+//         (c.type = 'Legal' AND d.expirationDate BETWEEN '${currentDate}' AND '${oneYearFromNow}')
+//         OR
+//         -- Notify contracts/agreements 3 months before renewal
+//         (c.type = 'Contracts/Agreement' AND d.expirationDate BETWEEN '${currentDate}' AND '${threeMonthsFromNow}')
+//         OR
+//         -- Notify regular documents expiring in 1 year
+//         (c.type = 'Document' AND d.expirationDate BETWEEN '${currentDate}' AND '${oneYearFromNow}')
+//     `;
+
+//   db.query(query, (err, results) => {
+//     if (err) {
+//       console.error("Error fetching notifications:", err);
+//       return res.status(500).json({ error: "Failed to fetch notifications." });
+//     }
+
+//     // Insert new notifications into the tblnotifications table if they don't already exist
+//     results.forEach((notif) => {
+//       const description = generateNotificationDescription(notif); // Create a descriptive notification message
+
+//       // Check if the notification already exists
+//       const checkQuery = `SELECT * FROM tblnotifications WHERE description = ? AND status = 0`;
+//       db.query(checkQuery, [description], (checkErr, checkResults) => {
+//         if (checkErr) {
+//           console.error(
+//             "Error checking for duplicate notifications:",
+//             checkErr
+//           );
+//         }
+
+//         if (checkResults.length === 0) {
+//           // No duplicate found, insert the new notification
+//           const insertQuery = `
+//               INSERT INTO tblnotifications (description, status)
+//               VALUES (?, ?)
+//             `;
+
+//           db.query(insertQuery, [description, 0], (insertErr) => {
+//             if (insertErr) {
+//               console.error("Error inserting notification:", insertErr);
+//             }
+//           });
+//         }
+//       });
+//     });
+
+//     return res.status(200).json(results);
+//   });
+// });
+
+// Endpoint to fetch customer orders
+// Endpoint to fetch customer orders
 app.get("/api/documents/notifications", (req, res) => {
   const currentDate = moment().format("YYYY-MM-DD");
   const oneYearFromNow = moment().add(1, "year").format("YYYY-MM-DD");
   const threeMonthsFromNow = moment().add(3, "months").format("YYYY-MM-DD");
 
-  // Modify the query as required
+  // Query to fetch documents that require notifications
   const query = `
       SELECT d.*, c.type AS categoryType
       FROM tbldocument d
@@ -757,6 +820,9 @@ app.get("/api/documents/notifications", (req, res) => {
         OR
         -- Notify regular documents expiring in 1 year
         (c.type = 'Document' AND d.expirationDate BETWEEN '${currentDate}' AND '${oneYearFromNow}')
+        OR
+        -- Notify for expired documents
+        (d.expirationDate < '${currentDate}')
     `;
 
   db.query(query, (err, results) => {
@@ -765,34 +831,70 @@ app.get("/api/documents/notifications", (req, res) => {
       return res.status(500).json({ error: "Failed to fetch notifications." });
     }
 
-    // Insert new notifications into the tblnotifications table if they don't already exist
     results.forEach((notif) => {
-      const description = generateNotificationDescription(notif); // Create a descriptive notification message
+      const expirationDate = moment(notif.expirationDate).format("YYYY-MM-DD");
+      const description = generateNotificationDescription(
+        notif,
+        expirationDate
+      );
 
       // Check if the notification already exists
-      const checkQuery = `SELECT * FROM tblnotifications WHERE description = ? AND status = 0`;
-      db.query(checkQuery, [description], (checkErr, checkResults) => {
-        if (checkErr) {
-          console.error(
-            "Error checking for duplicate notifications:",
-            checkErr
-          );
-        }
+      const checkQuery = `
+        SELECT * 
+        FROM tblnotifications 
+        WHERE description = ? 
+        AND expirationDate = ? 
+        AND categoryType = ?
+      `;
 
-        if (checkResults.length === 0) {
-          // No duplicate found, insert the new notification
-          const insertQuery = `
-              INSERT INTO tblnotifications (description, status)
-              VALUES (?, ?)
+      db.query(
+        checkQuery,
+        [description, expirationDate, notif.categoryType],
+        (checkErr, checkResults) => {
+          if (checkErr) {
+            console.error(
+              "Error checking for duplicate notifications:",
+              checkErr
+            );
+          }
+
+          if (checkResults.length === 0) {
+            // No duplicate found, insert the new notification
+            const insertQuery = `
+              INSERT INTO tblnotifications (description, expirationDate, categoryType, status)
+              VALUES (?, ?, ?, ?)
             `;
 
-          db.query(insertQuery, [description, 0], (insertErr) => {
-            if (insertErr) {
-              console.error("Error inserting notification:", insertErr);
+            // If the document is already expired, mark the status as 1 (urgent)
+            const status = notif.expirationDate < currentDate ? 1 : 0;
+
+            db.query(
+              insertQuery,
+              [description, expirationDate, notif.categoryType, status],
+              (insertErr) => {
+                if (insertErr) {
+                  console.error("Error inserting notification:", insertErr);
+                }
+              }
+            );
+          } else {
+            // Update the notification if necessary (e.g., if the document just expired)
+            const updateQuery = `
+            UPDATE tblnotifications 
+            SET status = 1 
+            WHERE id = ?
+          `;
+
+            if (notif.expirationDate < currentDate) {
+              db.query(updateQuery, [checkResults[0].id], (updateErr) => {
+                if (updateErr) {
+                  console.error("Error updating notification:", updateErr);
+                }
+              });
             }
-          });
+          }
         }
-      });
+      );
     });
 
     return res.status(200).json(results);
@@ -800,9 +902,13 @@ app.get("/api/documents/notifications", (req, res) => {
 });
 
 // Function to generate a detailed notification description
-function generateNotificationDescription(notif) {
-  const expirationDate = moment(notif.expirationDate).format("YYYY-MM-DD");
-  if (notif.categoryType === "Legal") {
+function generateNotificationDescription(notif, expirationDate) {
+  const currentDate = moment().format("YYYY-MM-DD");
+
+  if (moment(expirationDate).isBefore(currentDate)) {
+    // Notification for already expired documents
+    return `${notif.documentName} (${notif.categoryType}) has already expired on ${expirationDate}.`;
+  } else if (notif.categoryType === "Legal") {
     return `${notif.documentName} (Legal) is expiring soon on ${expirationDate}.`;
   } else if (notif.categoryType === "Contracts/Agreement") {
     return `${notif.documentName} (Contract/Agreement) needs renewal by ${expirationDate}.`;
@@ -985,6 +1091,36 @@ LIMIT 5;
 
       `;
 
+    const mostSoldProduct = `
+     SELECT it.itemName AS item_name,  
+       COALESCE(SUM(sd.quantity), 0) AS TOTALQUANTITY, 
+       COALESCE(SUM(sd.total_sum_price), 0) AS TOTALSALES 
+FROM tblitems it
+LEFT JOIN tblsales sd 
+ON it.itemName COLLATE utf8mb4_unicode_ci = sd.item_name COLLATE utf8mb4_unicode_ci 
+GROUP BY it.itemName 
+ORDER BY 
+       COALESCE(SUM(sd.quantity), 0) DESC,  
+       CASE WHEN COALESCE(SUM(sd.quantity), 0) = 0 THEN it.itemName END ASC
+LIMIT 5;
+
+      `;
+
+    const leastSoldProduct = `
+    SELECT it.itemName as item_name,  
+       COALESCE(SUM(sd.quantity), 0) AS TOTALQUANTITY, 
+       COALESCE(SUM(sd.total_sum_price), 0) AS TOTALSALES 
+FROM tblitems it
+LEFT JOIN tblsales sd 
+ON it.itemName COLLATE utf8mb4_unicode_ci = sd.item_name COLLATE utf8mb4_unicode_ci 
+GROUP BY it.itemName 
+ORDER BY 
+       COALESCE(SUM(sd.quantity), 0) ASC,  
+       CASE WHEN COALESCE(SUM(sd.quantity), 0) = 0 THEN it.itemName END ASC
+LIMIT 5;
+
+      `;
+
     // Execute all queries concurrently
     const results = await Promise.all([
       new Promise((resolve, reject) => {
@@ -1017,6 +1153,19 @@ LIMIT 5;
           resolve(results);
         });
       }),
+      new Promise((resolve, reject) => {
+        db.query(mostSoldProduct, (err, results) => {
+          if (err) return reject(err);
+          resolve(results);
+        });
+      }),
+
+      new Promise((resolve, reject) => {
+        db.query(leastSoldProduct, (err, results) => {
+          if (err) return reject(err);
+          resolve(results);
+        });
+      }),
     ]);
 
     // Destructure the results into separate variables
@@ -1026,6 +1175,8 @@ LIMIT 5;
       supplierDeliveries,
       production,
       productionMaterials,
+      mostSoldProducts,
+      leastSoldProducts,
     ] = results;
 
     // Send all data as a single response
@@ -1035,6 +1186,8 @@ LIMIT 5;
       supplierDeliveries,
       production,
       productionMaterials,
+      mostSoldProducts,
+      leastSoldProducts,
     });
   } catch (error) {
     console.error("Error fetching dashboard data: ", error);
@@ -7531,27 +7684,32 @@ REPORTS
   */
 
 app.get("/api/reports", (req, res) => {
-  const { reportType } = req.query;
+  const { reportType, startDate, endDate } = req.query;
 
   let sql = "";
   switch (reportType) {
     case "product":
       sql = `
-     SELECT 
-        it.itemId AS ID, 
-        it.itemName AS PRODUCT, 
-       it.price AS PRICE,  -- Formatted price
-        it.category AS CATEGORY, 
-        it.description AS DESCRIPTION, 
-        COALESCE(SUM(p.actualQuantityProduced), 0) AS QUANTITY,
-          CAST(DATE_FORMAT( p.productionDate, '%Y-%m-%d') AS CHAR) AS DATE  
-    FROM 
-        tblitems it
-    LEFT JOIN 
-        tblproduction p ON it.itemId = p.itemId
-    GROUP BY 
-        it.itemId
-      ORDER BY  p.productionDate DESC;
+        SELECT 
+          it.itemId AS ID, 
+          it.itemName AS PRODUCT, 
+          it.price AS PRICE, 
+          it.category AS CATEGORY, 
+          it.description AS DESCRIPTION, 
+          COALESCE(SUM(p.actualQuantityProduced), 0) AS QUANTITY,
+          CAST(DATE_FORMAT(p.productionDate, '%Y-%m-%d') AS CHAR) AS DATE  
+        FROM 
+          tblitems it
+        LEFT JOIN 
+          tblproduction p ON it.itemId = p.itemId
+        ${
+          startDate && endDate
+            ? `WHERE p.productionDate BETWEEN '${startDate}' AND '${endDate}'`
+            : ""
+        }
+        GROUP BY 
+          it.itemId
+        ORDER BY DATE DESC;
       `;
       break;
 
@@ -7562,55 +7720,65 @@ app.get("/api/reports", (req, res) => {
           raw.matName AS MATERIAL, 
           raw.category AS CATEGORY, 
           COALESCE(SUM(odi.remaining_quantity), 0) AS QUANTITY,
-          CAST(DATE_FORMAT( odi.dateReceive, '%Y-%m-%d') AS CHAR) AS DATE  
+          CAST(DATE_FORMAT(odi.dateReceive, '%Y-%m-%d') AS CHAR) AS DATE  
         FROM tblrawmats raw
         LEFT JOIN tblorderfromsupplier_items odi ON raw.matId = odi.matId
+        ${
+          startDate && endDate
+            ? `WHERE odi.dateReceive BETWEEN '${startDate}' AND '${endDate}'`
+            : ""
+        }
         GROUP BY raw.matName, raw.category, raw.matId
         ORDER BY DATE DESC;
       `;
       break;
 
-    // case "suppliers":
-    //   sql = `
-    //     SELECT s.supplyId AS ID, s.supplyName AS SUPPLIER, s.contact AS CONTACT,
-    //     GROUP_CONCAT(r.matName) AS PRODUCTS
-    //     FROM tblsuppliers s
-    //     LEFT JOIN tblsupplierrawmats sr ON s.supplyId = sr.supplierId
-    //     LEFT JOIN tblrawmats r ON sr.rawMatId = r.matId
-    //     GROUP BY s.supplyId;
-    //   `;
-    //   break;
-
     case "documents":
       sql = `
-    SELECT 
-      d.documentName AS DOCUMENT, 
-      d.category AS CATEGORY,  
-      d.description AS DESCRIPTION, 
-      CAST(DATE_FORMAT(d.dateEffective, '%Y-%m-%d') AS CHAR) AS EFFECTIVITY,  
-      CAST(DATE_FORMAT(d.expirationDate, '%Y-%m-%d') AS CHAR) AS EXPIRATION,  
-      CASE 
-          WHEN d.expirationDate IS NULL THEN 'No Expiration Date'
-          WHEN d.expirationDate < CURDATE() THEN 'Expired'
-          WHEN TIMESTAMPDIFF(MONTH, CURDATE(), d.expirationDate) <= 3 THEN CONCAT(TIMESTAMPDIFF(MONTH, CURDATE(), d.expirationDate), ' months left')
-          ELSE CONCAT(TIMESTAMPDIFF(MONTH, CURDATE(), d.expirationDate), ' months left')
-      END AS VALIDITY
-    FROM 
-      tbldocument d
-    ORDER BY 
-      d.expirationDate DESC;
+        SELECT 
+          d.documentName AS DOCUMENT, 
+          d.category AS CATEGORY,  
+          d.description AS DESCRIPTION, 
+          CAST(DATE_FORMAT(d.dateEffective, '%Y-%m-%d') AS CHAR) AS EFFECTIVITY,  
+          CAST(DATE_FORMAT(d.expirationDate, '%Y-%m-%d') AS CHAR) AS EXPIRATION,  
+          CASE 
+              WHEN d.expirationDate IS NULL THEN 'No Expiration Date'
+              WHEN d.expirationDate < CURDATE() THEN 'Expired'
+              WHEN TIMESTAMPDIFF(MONTH, CURDATE(), d.expirationDate) <= 3 THEN CONCAT(TIMESTAMPDIFF(MONTH, CURDATE(), d.expirationDate), ' months left')
+              ELSE CONCAT(TIMESTAMPDIFF(MONTH, CURDATE(), d.expirationDate), ' months left')
+          END AS VALIDITY
+        FROM 
+          tbldocument d
+        ${
+          startDate && endDate
+            ? `WHERE d.expirationDate BETWEEN '${startDate}' AND '${endDate}'`
+            : ""
+        }
+        ORDER BY 
+          d.expirationDate DESC;
       `;
       break;
 
-    case "sales":
-      sql = `
-   SELECT  sl.order_id AS ID, sl.customer_name AS CUSTOMER, sl.customer_loc AS LOCATION, sl.item_name AS ITEM,   
-   sl.total_price AS TOTAL,
-   sl.mop AS MOP ,  sl.date AS DATE 
-   FROM tblsales sl 
-   ORDER BY sl.order_id DESC;
-      `;
-      break;
+      case "sales":
+        sql = `
+          SELECT 
+            sl.order_id AS ID, 
+            sl.customer_name AS CUSTOMER, 
+            sl.customer_loc AS LOCATION, 
+            sl.item_name AS ITEM,   
+            sl.total_price AS TOTAL,
+            sl.mop AS MOP,  
+            sl.date AS DATE 
+          FROM tblsales sl
+          ${
+            startDate && endDate
+              ? `WHERE STR_TO_DATE(sl.date, '%m-%d-%Y') BETWEEN '${startDate}' AND '${endDate}'`
+              : ""
+          }
+          ORDER BY sl.order_id DESC;
+        `;
+        break;
+      
 
     default:
       return res.status(400).send("Invalid report type");
@@ -7625,6 +7793,99 @@ app.get("/api/reports", (req, res) => {
     res.json(results);
   });
 });
+
+// app.get("/api/reports", (req, res) => {
+//   const { reportType, startDate, endDate } = req.query;
+
+//   if (!startDate || !endDate) {
+//     return res.status(400).send("Start date and end date are required.");
+//   }
+
+//   let sql = "";
+//   switch (reportType) {
+//     case "product":
+//       sql = `
+//         SELECT
+//           it.itemId AS ID,
+//           it.itemName AS PRODUCT,
+//           it.price AS PRICE,
+//           it.category AS CATEGORY,
+//           it.description AS DESCRIPTION,
+//           COALESCE(SUM(p.actualQuantityProduced), 0) AS QUANTITY,
+//           DATE(p.productionDate) AS DATE
+//         FROM tblitems it
+//         LEFT JOIN tblproduction p ON it.itemId = p.itemId
+//         WHERE p.productionDate BETWEEN ? AND ?
+//         GROUP BY it.itemId
+//         ORDER BY DATE DESC;
+//       `;
+//       break;
+
+//     case "rawMaterials":
+//       sql = `
+//         SELECT
+//           raw.matId AS ID,
+//           raw.matName AS MATERIAL,
+//           raw.category AS CATEGORY,
+//           COALESCE(SUM(odi.remaining_quantity), 0) AS QUANTITY,
+//           DATE(odi.dateReceive) AS DATE
+//         FROM tblrawmats raw
+//         LEFT JOIN tblorderfromsupplier_items odi ON raw.matId = odi.matId
+//         WHERE odi.dateReceive BETWEEN ? AND ?
+//         GROUP BY raw.matId
+//         ORDER BY DATE DESC;
+//       `;
+//       break;
+
+//     case "documents":
+//       sql = `
+//         SELECT
+//           d.documentName AS DOCUMENT,
+//           d.category AS CATEGORY,
+//           d.description AS DESCRIPTION,
+//           DATE(d.dateEffective) AS EFFECTIVITY,
+//           DATE(d.expirationDate) AS EXPIRATION,
+//           CASE
+//               WHEN d.expirationDate IS NULL THEN 'No Expiration Date'
+//               WHEN d.expirationDate < CURDATE() THEN 'Expired'
+//               WHEN TIMESTAMPDIFF(MONTH, CURDATE(), d.expirationDate) <= 3 THEN CONCAT(TIMESTAMPDIFF(MONTH, CURDATE(), d.expirationDate), ' months left')
+//               ELSE CONCAT(TIMESTAMPDIFF(MONTH, CURDATE(), d.expirationDate), ' months left')
+//           END AS VALIDITY
+//         FROM tbldocument d
+//         WHERE d.dateEffective BETWEEN ? AND ?
+//         ORDER BY d.expirationDate DESC;
+//       `;
+//       break;
+
+//     case "sales":
+//       sql = `
+//         SELECT
+//           sl.order_id AS ID,
+//           sl.customer_name AS CUSTOMER,
+//           sl.customer_loc AS LOCATION,
+//           sl.item_name AS ITEM,
+//           sl.total_price AS TOTAL,
+//           sl.mop AS MOP,
+//           DATE(sl.date) AS DATE
+//         FROM tblsales sl
+//         WHERE sl.date BETWEEN ? AND ?
+//         ORDER BY sl.order_id DESC;
+//       `;
+//       break;
+
+//     default:
+//       return res.status(400).send("Invalid report type.");
+//   }
+
+//   db.query(sql, [startDate, endDate], (err, results) => {
+//     if (err) {
+//       console.error(`Error fetching ${reportType} data:`, err);
+//       return res.status(500).send("Error fetching report data.");
+//     }
+
+//     res.json(results);
+//   });
+// });
 
 app.listen(port, () => {
   console.log(`Server running at http://${localIP}:${port}`);
