@@ -1048,7 +1048,7 @@ app.get("/api/dashboard", async (req, res) => {
         HAVING 
           COALESCE(SUM(odi.remaining_quantity), 0) < 20
         ORDER BY 
-          total_remaining_quantity ASC;
+          Remaining ASC;
       `;
 
     // Supplier Deliveries query
