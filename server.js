@@ -1077,8 +1077,8 @@ app.get("/api/dashboard", async (req, res) => {
     const prodMat = `
       SELECT
 		oi.matId AS ID,
-    rm.matName AS Material,
-    s.supplyName as Supplier,
+    rm.matName,
+    s.supplyName,
     SUM(oi.quantity) AS totalOrdered
 FROM
     tblorderfromsupplier_items oi
