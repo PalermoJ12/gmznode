@@ -7921,6 +7921,301 @@ app.get("/api/reports", (req, res) => {
 //   });
 // });
 
+/* COURIER SA SYSTEM ADMIN */
+app.get("/api/get_couriers/", async (req, res) => {
+  try {
+    const sql = `SELECT *
+      FROM tblvehicle
+      ORDER BY rider ASC;
+      `;
+
+    db.query(sql, (err, result) => {
+      if (err) {
+        console.error("Error fetching couriers:", err);
+        return res
+          .status(500)
+          .json({ status: "error", message: "Internal server error" });
+      }
+
+      if (!result || result.length === 0) {
+        return res
+          .status(200)
+          .json({ status: "success", res: "No couriers found." });
+      }
+
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching couriers:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+//add courier
+app.post("/api/add-vehicle", (req, res) => {
+  const { rider, vehicle_type, vehicle_plate } = req.body;
+
+  // Check if the vehicle_plate exists
+  const checkQuery = "SELECT * FROM tblvehicle WHERE vehicle_plate = ?";
+  db.query(checkQuery, [vehicle_plate], (err, results) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ message: "Database error." });
+    }
+
+    if (results.length > 0) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Vehicle already exists." });
+    }
+
+    // Insert new vehicle
+    const insertQuery = `
+      INSERT INTO tblvehicle (vehicle_plate, rider, vehicle_type, vehicle_available)
+      VALUES (?, ?, ?, 1)
+    `;
+
+    db.query(
+      insertQuery,
+      [vehicle_plate, rider, vehicle_type],
+      (err, result) => {
+        if (err) {
+          console.error(err);
+          return res.status(500).json({ message: "Failed to add vehicle." });
+        }
+
+        return res.status(201).json({ message: "Courier added successfully." });
+      }
+    );
+  });
+});
+
+//edit courier
+
+app.put("/api/edit-vehicle", (req, res) => {
+  const { rider, vehicle_type, vehicle_plate, original_plate } = req.body;
+
+  // Only check for duplicate vehicle plate if the plate is being changed
+  if (vehicle_plate !== original_plate) {
+    const checkQuery = "SELECT * FROM tblvehicle WHERE vehicle_plate = ?";
+    db.query(checkQuery, [vehicle_plate], (err, results) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ message: "Database error." });
+      }
+
+      // If the new vehicle plate already exists, send an error
+      if (results.length > 0) {
+        return res
+          .status(400)
+          .json({ message: "Vehicle plate already exists." });
+      }
+
+      // If no duplicate, proceed to update the vehicle
+      updateVehicle();
+    });
+  } else {
+    // If the vehicle plate has not changed, directly proceed to update
+    updateVehicle();
+  }
+
+  // Function to update vehicle details
+  function updateVehicle() {
+    const updateQuery = `
+      UPDATE tblvehicle
+      SET rider = ?, vehicle_type = ?
+      WHERE vehicle_plate = ?
+    `;
+
+    db.query(
+      updateQuery,
+      [rider, vehicle_type, original_plate],
+      (err, result) => {
+        if (err) {
+          console.error(err);
+          return res.status(500).json({ message: "Failed to update vehicle." });
+        }
+
+        return res
+          .status(200)
+          .json({ message: "Vehicle updated successfully." });
+      }
+    );
+  }
+});
+
+//delete courier
+app.delete("/api/delete-vehicle", (req, res) => {
+  const { vehicle_plate } = req.body;
+
+  const deleteQuery = "DELETE FROM tblvehicle WHERE vehicle_plate = ?";
+
+  db.query(deleteQuery, [vehicle_plate], (err, result) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ message: "Database error." });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(400).json({ message: "Vehicle not found." });
+    }
+
+    return res.status(200).json({ message: "Vehicle deleted successfully." });
+  });
+});
+
+/* COURIER SA SYSTEM ADMIN */
+
+/* MOP SA SYSTEM ADMIN */
+app.get("/api/get_mop/", async (req, res) => {
+  try {
+    const sql = `SELECT *
+      FROM tbl_mop
+      ORDER BY mop ASC;
+      `;
+
+    db.query(sql, (err, result) => {
+      if (err) {
+        console.error("Error fetching mop:", err);
+        return res
+          .status(500)
+          .json({ status: "error", message: "Internal server error" });
+      }
+
+      if (!result || result.length === 0) {
+        return res
+          .status(200)
+          .json({ status: "success", res: "No MOP found." });
+      }
+
+      return res.status(200).json({ status: "success", res: result });
+    });
+  } catch (error) {
+    console.error("Error fetching mop:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+//add mop
+app.post("/api/add-mop", (req, res) => {
+  const { paymentName, has_reference } = req.body;
+
+  // Check if the rider already exists (optional, depending on your logic)
+  const checkQuery = "SELECT * FROM tbl_mop WHERE mop = ?";
+  db.query(checkQuery, [paymentName], (err, results) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ message: "Database error." });
+    }
+
+    if (results.length > 0) {
+      return res.status(400).json({ message: "MOP already exists." });
+    }
+
+    // Insert new mode of payment
+    const insertQuery = `
+      INSERT INTO tbl_mop (mop, attach_file)
+      VALUES (?, ?)
+    `;
+    db.query(insertQuery, [paymentName, has_reference], (err, result) => {
+      if (err) {
+        console.error(err);
+        return res
+          .status(500)
+          .json({ message: "Failed to add mode of payment." });
+      }
+
+      return res
+        .status(200)
+        .json({ message: "Mode of payment added successfully." });
+    });
+  });
+});
+
+//edit mop
+// Backend route to handle editing of mode of payment
+app.put('/api/edit-mop', (req, res) => {
+  const { paymentName, originalPaymentName, hasReference } = req.body;
+
+  // Step 1: Check if the paymentName already exists (other than the original payment)
+  const checkQuery = 'SELECT * FROM tbl_mop WHERE mop = ?';  // Ensure column name matches in the table
+  db.query(checkQuery, [paymentName], (err, results) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ message: 'Database error.' });
+    }
+
+    // If paymentName exists and it’s not the same as the original payment name, return an error
+    if (results.length > 0 && results[0].mop !== originalPaymentName) {  // Ensure column name matches
+      return res.status(400).json({ message: 'Payment name already exists.' });
+    }
+
+    // Step 2: Proceed with the update if the payment name is unique or same as the original
+    const updateQuery = `
+      UPDATE tbl_mop
+      SET mop = ?, attach_file = ?
+      WHERE mop = ?
+    `;
+
+    db.query(
+      updateQuery,
+      [paymentName, hasReference ? 1 : 0, originalPaymentName], // Ensure originalPaymentName matches
+      (err, result) => {
+        if (err) {
+          console.error(err);
+          return res.status(500).json({ message: 'Failed to update mode of payment.' });
+        }
+
+        // If no rows were affected, return an error (should not happen if originalPaymentName exists)
+        if (result.affectedRows === 0) {
+          return res.status(400).json({ message: 'Mode of payment not found.' });
+        }
+
+        return res.status(200).json({ message: 'Mode of payment updated successfully.' });
+      }
+    );
+  });
+});
+
+
+//delete mop
+app.delete("/api/delete-mop", (req, res) => {
+  const { paymentName } = req.body;
+
+  console.log(paymentName);
+
+  // Check if the mode of payment exists
+  const checkQuery = "SELECT * FROM tbl_mop WHERE mop = ?";
+  db.query(checkQuery, [paymentName], (err, results) => {
+    console.log(results);
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ message: "Database error." });
+    }
+
+    if (results.length === 0) {
+      return res.status(400).json({ message: "Mode of payment not found." });
+    }
+
+    // Delete mode of payment based on rider name
+    const deleteQuery = "DELETE FROM tbl_mop WHERE mop = ?";
+    db.query(deleteQuery, [paymentName], (err, result) => {
+      if (err) {
+        console.error(err);
+        return res
+          .status(500)
+          .json({ message: "Failed to delete mode of payment." });
+      }
+
+      return res
+        .status(200)
+        .json({ message: "Mode of payment deleted successfully." });
+    });
+  });
+});
+
+/* MOP SA SYSTEM ADMIN */
+
 app.listen(port, () => {
   console.log(`Server running at http://${localIP}:${port}`);
 });
