@@ -1026,7 +1026,7 @@ app.get("/api/dashboard", async (req, res) => {
   try {
     // Inventory Items query
     const inventoryQuery = `
-        SELECT it.ItemName, it.quantity AS Remaining, COALESCE(SUM(p.actualQuantityProduced), 0) AS totalQuantity 
+        SELECT it.ItemName AS Product, it.quantity AS Remaining, COALESCE(SUM(p.actualQuantityProduced), 0) AS totalQuantity 
         FROM tblitems it 
         LEFT JOIN tblproduction p ON it.itemId = p.itemId 
         GROUP BY it.itemId 
@@ -1037,8 +1037,8 @@ app.get("/api/dashboard", async (req, res) => {
     // Raw Materials query
     const rawMatsQuery = `
         SELECT 
-          raw.matName, 
-          COALESCE(SUM(odi.remaining_quantity), 0) AS total_remaining_quantity
+          raw.matName AS Material, 
+          COALESCE(SUM(odi.remaining_quantity), 0) AS Remaining
         FROM 
           tblrawmats raw
         LEFT JOIN 
@@ -1054,7 +1054,7 @@ app.get("/api/dashboard", async (req, res) => {
     // Supplier Deliveries query
     const supDeliQuery = `
         SELECT  
-          sp.supplyName,
+          sp.supplyName as Supplier,
           od.totalCost AS totalCost,
           IFNULL(DATE_FORMAT(od.orderDate, '%Y-%m-%d'), 'N/A') AS OrderDate,
           SUM(odi.quantity) AS totalQuantity
@@ -1067,7 +1067,7 @@ app.get("/api/dashboard", async (req, res) => {
 
     // Production Dashboard query
     const prodQuery = `
-        SELECT pd.staffName, it.itemName 
+        SELECT pd.staffName , it.itemName AS Product
         FROM tblproduction pd 
         LEFT JOIN tblitems it ON pd.itemId = it.itemId 
         WHERE pd.production_status = 0 
@@ -1076,9 +1076,9 @@ app.get("/api/dashboard", async (req, res) => {
 
     const prodMat = `
       SELECT
-		oi.matId,
-    rm.matName,
-    s.supplyName,
+		oi.matId AS ID,
+    rm.matName AS Material,
+    s.supplyName as Supplier,
     SUM(oi.quantity) AS totalOrdered
 FROM
     tblorderfromsupplier_items oi
