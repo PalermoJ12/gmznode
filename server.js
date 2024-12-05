@@ -5682,6 +5682,41 @@ app.get("/api/sales_today/", (req, res) => {
   });
 });
 
+app.get("/api/expensethismonth/", (req, res) => {
+  const sql = `SELECT 
+  IFNULL(SUM(totalCost), 0) AS TotalCostThisMonth
+FROM 
+  tblordersfromsupplier
+WHERE 
+  MONTH(orderDate) = MONTH(CURRENT_DATE())
+  AND YEAR(orderDate) = YEAR(CURRENT_DATE());
+                `;
+
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error("Error fetching orders:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+
+
+    if (!result || result.length === 0) {
+      return res
+        .status(200)
+        .json({ status: "success", message: "No supplier expense." });
+    }
+
+    // Assuming the result contains a column `daily_total_sales`
+    const dailyTotalSales = result[0].TotalCostThisMonth;
+
+    return res.status(200).json({
+      status: "success",
+      expense: dailyTotalSales,
+    });
+  });
+});
+
 app.get("/api/sales_month/", (req, res) => {
   const sql = `SELECT 
               SUM(total_sum_price) AS monthly_total_sales
@@ -7759,8 +7794,8 @@ app.get("/api/reports", (req, res) => {
       `;
       break;
 
-      case "sales":
-        sql = `
+    case "sales":
+      sql = `
           SELECT 
             sl.order_id AS ID, 
             sl.customer_name AS CUSTOMER, 
@@ -7777,8 +7812,7 @@ app.get("/api/reports", (req, res) => {
           }
           ORDER BY sl.order_id DESC;
         `;
-        break;
-      
+      break;
 
     default:
       return res.status(400).send("Invalid report type");
