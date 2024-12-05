@@ -1741,7 +1741,7 @@ app.put("/api/updatemats/:matId", (req, res) => {
   const sql =
     "UPDATE tblrawmats SET matName = ?, quantity = ?, category = ? WHERE matId = ?";
 
-  db.query(sql, [matName, quantity, category, matId], (err, result) => {
+  db.query(sql, [matName, 0, category, matId], (err, result) => {
     if (err) {
       console.error("Error updating raw material:", err);
       return res.status(500).json({ error: "Database error occurred" });
