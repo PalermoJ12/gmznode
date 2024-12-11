@@ -57,8 +57,8 @@
 
 const db = mysql.createPool({
   host: '127.0.0.1',           // Localhost (VPS)
-  user: 'u319302750_dbgmzadmin', // Database user
-  password: 'Dbgmzadmin112024!', // Database password
+  user: 'root', // Database user
+  password: '', // Database password
   database: 'dbgmz', // Database name
   connectionLimit: 10          // Connection limit (adjust if necessary)
 });
