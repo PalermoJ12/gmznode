@@ -3814,7 +3814,7 @@ app.get("/api/categories/rawMaterials", (req, res) => {
 
 app.put("/api/production/complete/:productionId", async (req, res) => {
   const { productionId } = req.params;
-  const { username, access,producedQuantity } = req.body;
+  const { username, access, producedQuantity } = req.body;
 
   // Get a connection from the pool to start a transaction
   db.getConnection((err, connection) => {
@@ -5724,6 +5724,7 @@ app.get("/api/sales/summary", (req, res) => {
     res.json(results);
   });
 });
+
 /*
 SALES
 */ /*
@@ -6438,7 +6439,7 @@ app.get("/api/courier_ready/", (req, res) => {
       // For each vehicle_plate, fetch the orders and associated products
       const ordersWithProducts = await Promise.all(
         result.map(async (vehicle) => {
-          const orderSql = `SELECT DISTINCT order_id, customer_loc, customer_name, total_sum_price
+          const orderSql = `SELECT DISTINCT order_id, customer_id, customer_loc, customer_name, total_sum_price
                             FROM tblorders_customer
                             WHERE vehicle_plate = ?
                             AND status = "READY"
@@ -6472,6 +6473,7 @@ app.get("/api/courier_ready/", (req, res) => {
 
               return {
                 order_id: order.order_id,
+                customer_id: order.customer_id,
                 customer_loc: order.customer_loc,
                 customer_name: order.customer_name,
                 total_sum_price: order.total_sum_price,
@@ -6594,7 +6596,7 @@ app.get("/api/transit/", (req, res) => {
       // For each vehicle_plate, fetch the orders and associated products
       const ordersWithProducts = await Promise.all(
         result.map(async (vehicle) => {
-          const orderSql = `SELECT DISTINCT order_id, customer_loc, customer_name,total_sum_price, time_out, mop
+          const orderSql = `SELECT DISTINCT order_id, customer_id, customer_loc, customer_name,total_sum_price, time_out, mop
                             FROM tblorders_customer
                             WHERE vehicle_plate = ?
                             AND status = "Transit"
@@ -6629,6 +6631,7 @@ app.get("/api/transit/", (req, res) => {
               return {
                 order_id: order.order_id,
                 mop: order.mop,
+                customer_id: order.customer_id,
                 customer_loc: order.customer_loc,
                 customer_name: order.customer_name,
                 total_sum_price: order.total_sum_price,
@@ -7156,6 +7159,227 @@ app.get("/api/cancelled_orders/", (req, res) => {
   });
 });
 
+/* NOTIFICATION */
+app.get("/api/fetch_notif", (req, res) => {
+  const sql = `SELECT *
+  FROM tblnotifications 
+  WHERE account_notif = 3
+  ORDER BY id DESC;`;
+
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error("Error occured (api/fetch_notif): ", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+
+    if (!result || result.length === 0) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "No notification found." });
+    }
+    return res.status(200).json({ status: "success", res: result });
+  });
+});
+
+app.post("/api/mark-as-read-notif", (req, res) => {
+  const { id } = req.body;
+
+  // Update the status of the notification to 1 (read)
+  const query = `UPDATE tblnotifications SET status = 1 WHERE id = ?`;
+
+  db.query(query, [id], (err, result) => {
+    if (err) {
+      console.error("Error marking notification as read:", err);
+      return res
+        .status(500)
+        .json({ error: "Failed to update notification status." });
+    }
+
+    return res.status(200).json({ message: "Notification marked as read." });
+  });
+});
+
+app.post("/api/insert_notif/", (req, res) => {
+  const { orderId, userId } = req.body;
+  console.log("INSERT NOTIF: ", orderId, userId);
+
+  const description = `Order Accepted (${orderId})`;
+  const status = 0;
+  const account_notif = 4;
+
+  try {
+    const query = `INSERT INTO 
+    tblnotifications (description, status, account_notif, customer_id) 
+    VALUES 
+    (?, ?, ?, ?)`;
+
+    db.query(
+      query,
+      [description, status, account_notif, userId],
+      (err, result) => {
+        if (err) {
+          console.error("Error occured (/insert_notif): ", err);
+          return res.status(500).json({ message: "Internal server error" });
+        }
+
+        return res.status(200).json({
+          status: "success",
+          message: "Notification inserted successfully",
+          data: {
+            id: result.insertId,
+            affectedRows: result.affectedRows,
+          },
+        });
+      }
+    );
+  } catch (error) {
+    console.error("Error occured (/insert_notif): ", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.post("/api/insert_notif_decline/", (req, res) => {
+  const { orderId, userId } = req.body;
+  console.log("INSERT NOTIF: ", orderId, userId);
+
+  const description = `Sorry, your order ${orderId} was declined.`;
+  const status = 0;
+  const account_notif = 4;
+
+  try {
+    const query = `INSERT INTO 
+    tblnotifications (description, status, account_notif, customer_id) 
+    VALUES 
+    (?, ?, ?, ?)`;
+
+    db.query(
+      query,
+      [description, status, account_notif, userId],
+      (err, result) => {
+        if (err) {
+          console.error("Error occured (/insert_notif_decline): ", err);
+          return res.status(500).json({ message: "Internal server error" });
+        }
+
+        return res.status(200).json({
+          status: "success",
+          data: {
+            id: result.insertId,
+            affectedRows: result.affectedRows,
+          },
+        });
+      }
+    );
+  } catch (error) {
+    console.error("Error occured (/insert_notif_decline): ", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.post("/api/insert_notif_transit/", (req, res) => {
+  const orders = req.body; // Array of orders
+  console.log("Received orders:", orders);
+
+  try {
+    const query = `INSERT INTO tblnotifications (description, status, account_notif, customer_id) VALUES (?, ?, ?, ?)`;
+
+    // Loop through all orders and insert them into the database
+    const insertPromises = orders.map((order) => {
+      const description = `Your order is on the way (${order.order_id}).`;
+      const status = 0; // Example status
+      const account_notif = 4; // Example account notification ID
+
+      // Insert each order into the database
+      return new Promise((resolve, reject) => {
+        db.query(
+          query,
+          [description, status, account_notif, order.customer_id],
+          (err, result) => {
+            if (err) {
+              console.error("Error inserting order:", err);
+              reject(err); // Reject if there's an error
+            } else {
+              resolve(result); // Resolve if the insertion is successful
+            }
+          }
+        );
+      });
+    });
+
+    // Wait for all insertions to complete
+    Promise.all(insertPromises)
+      .then((results) => {
+        // After all inserts are done, send the response
+        res.status(200).json({
+          status: "success",
+          data: {
+            affectedRows: results.length, // Total number of affected rows
+          },
+        });
+      })
+      .catch((error) => {
+        // If any insert failed, handle the error
+        res.status(500).json({ message: "Error inserting data", error });
+      });
+  } catch (error) {
+    console.error("Error occurred:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.post("/api/insert_notif_done/", (req, res) => {
+  const orders = req.body; // Array of orders
+  console.log("NOTIF DONE: ",orders);
+
+  try {
+    const query = `INSERT INTO tblnotifications (description, status, account_notif, customer_id) VALUES (?, ?, ?, ?)`;
+
+    // Loop through all orders and insert them into the database
+    const insertPromises = orders.map((order) => {
+      const description = `Order completed (${order.order_id}), Thanks for the order!`;
+      const status = 0; // Example status
+      const account_notif = 4; // Example account notification ID
+
+      // Insert each order into the database
+      return new Promise((resolve, reject) => {
+        db.query(
+          query,
+          [description, status, account_notif, order.customer_id],
+          (err, result) => {
+            if (err) {
+              console.error("Error inserting order:", err);
+              reject(err); // Reject if there's an error
+            } else {
+              resolve(result); // Resolve if the insertion is successful
+            }
+          }
+        );
+      });
+    });
+
+    // Wait for all insertions to complete
+    Promise.all(insertPromises)
+      .then((results) => {
+        // After all inserts are done, send the response
+        res.status(200).json({
+          status: "success",
+          data: {
+            affectedRows: results.length, // Total number of affected rows
+          },
+        });
+      })
+      .catch((error) => {
+        // If any insert failed, handle the error
+        res.status(500).json({ message: "Error inserting data", error });
+      });
+  } catch (error) {
+    console.error("Error occurred:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 /*
 SALES
 */
@@ -7483,6 +7707,25 @@ app.post("/api/checkout_cus", async (req, res) => {
 
     Promise.all(insertOrderPromises)
       .then(() => {
+        const description = `New order place (${order_id}).`;
+        const status = 0;
+        const account_notif = 3;
+
+        const insertToNotif = `INSERT INTO tblnotifications (description, status, account_notif, customer_id)
+        VALUES (?, ?, ?, ?)`;
+
+        db.query(
+          insertToNotif,
+          [description, status, account_notif, customerId],
+          (err, result) => {
+            if (err) {
+              console.error("Error inserting notification:", err);
+            } else {
+              console.log("Notification inserted successfully:", result);
+            }
+          }
+        );
+
         const clearCartSql = `DELETE FROM tblcart WHERE customer_id = ?`;
         db.query(clearCartSql, [customerId], (err) => {
           if (err) {
@@ -7882,6 +8125,33 @@ app.post("/api/cancelling_order/", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
+//fetch notif customer
+app.post("/api/fetch_notif_customer", async (req, res) => {
+  const { userId } = req.body;
+
+  const sql = `SELECT * FROM tblnotifications 
+  WHERE customer_id = ? AND account_notif = 4
+  ORDER BY id DESC;`;
+
+  db.query(sql, [userId], (err, result) => {
+    if (err) {
+      console.error("Error fetching orders:", err);
+      return res
+        .status(500)
+        .json({ status: "error", message: "Internal server error" });
+    }
+
+    if (!result || result.length === 0) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "No notification found." });
+    }
+    return res.status(200).json({ status: "success", res: result });
+  });
+});
+
+app.post("/api/order_addNotif", async (req, res) => {});
 
 /*
 CUSTOMER
